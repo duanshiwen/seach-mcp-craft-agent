@@ -1,0 +1,19 @@
+{
+  "id": "search-engine-mcp_a1b2c3d4",
+  "name": "搜索引擎 MCP",
+  "slug": "search-engine-mcp",
+  "enabled": true,
+  "provider": "search-engine",
+  "type": "mcp",
+  "icon": "🔍",
+  "tagline": "免费的多搜索引擎 API 工具，支持 Google、Bing、Yahoo、DuckDuckGo",
+  "mcp": {
+    "transport": "stdio",
+    "command": "python",
+    "args": ["-m", "src.server"],
+    "env": {
+      "PYTHONPATH": "/Users/yakii/code/search-engine-mcp"
+    },
+    "authType": "none"
+  }
+}

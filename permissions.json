@@ -1,0 +1,12 @@
+{
+  "allowedMcpPatterns": [
+    {
+      "pattern": "search",
+      "comment": "允许搜索操作"
+    },
+    {
+      "pattern": "list_engines",
+      "comment": "允许列出搜索引擎"
+    }
+  ]
+}

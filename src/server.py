@@ -1,0 +1,289 @@
+"""MCP 服务器主入口 - 实现搜索引擎 MCP 服务。"""
+
+import asyncio
+import logging
+import sys
+from typing import Any
+
+from mcp.server import Server
+from mcp.server.models import InitializationOptions
+from mcp.server.stdio import stdio_server
+from mcp.server.lowlevel.server import NotificationOptions
+from mcp.types import (
+    TextContent,
+    Tool,
+)
+
+from src.engines import (
+    BingSearchEngine,
+    DuckDuckGoSearchEngine,
+    GoogleSearchEngine,
+    YahooSearchEngine,
+)
+from src.types import SearchEngine, SearchResult
+from src.utils import (
+    format_results_for_display,
+    get_engine_display_name,
+    setup_logging,
+    validate_query,
+)
+
+logger = logging.getLogger(__name__)
+
+# 创建 MCP 服务器实例
+server = Server("search-engine-mcp")
+
+
+# 定义工具列表
+TOOLS = [
+    Tool(
+        name="search",
+        description=(
+            "通过指定搜索引擎查询信息，返回结构化的搜索结果。"
+            "支持 Google、Bing、Yahoo、DuckDuckGo 四个搜索引擎。"
+            "适合获取实时信息，如天气、新闻、最新资讯等。"
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "搜索查询关键词",
+                    "minLength": 1,
+                    "maxLength": 500,
+                },
+                "engine": {
+                    "type": "string",
+                    "enum": ["google", "bing", "yahoo", "duckduckgo"],
+                    "default": "bing",
+                    "description": "搜索引擎选择（默认: bing）",
+                },
+                "max_results": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 10,
+                    "default": 5,
+                    "description": "最大返回结果数量（默认: 5）",
+                },
+            },
+            "required": ["query"],
+        },
+    ),
+    Tool(
+        name="list_engines",
+        description="列出所有可用的搜索引擎及其状态",
+        inputSchema={
+            "type": "object",
+            "properties": {},
+        },
+    ),
+]
+
+
+def get_search_engine(engine_name: str, max_results: int = 5) -> Any:
+    """根据引擎名称获取搜索引擎实例。
+
+    Args:
+        engine_name: 搜索引擎名称
+        max_results: 最大返回结果数量
+
+    Returns:
+        搜索引擎实例
+
+    Raises:
+        ValueError: 不支持的搜索引擎
+    """
+    engine_map = {
+        "google": GoogleSearchEngine,
+        "bing": BingSearchEngine,
+        "yahoo": YahooSearchEngine,
+        "duckduckgo": DuckDuckGoSearchEngine,
+    }
+
+    engine_class = engine_map.get(engine_name.lower())
+    if not engine_class:
+        raise ValueError(f"不支持的搜索引擎: {engine_name}")
+
+    return engine_class(max_results=max_results, headless=True)
+
+
+async def perform_search(
+    query: str, engine: str = "bing", max_results: int = 5
+) -> list[SearchResult]:
+    """执行搜索操作。
+
+    Args:
+        query: 搜索查询词
+        engine: 搜索引擎名称
+        max_results: 最大返回结果数量
+
+    Returns:
+        搜索结果列表
+
+    Raises:
+        Exception: 搜索失败时抛出异常
+    """
+    search_engine = get_search_engine(engine, max_results)
+
+    async with search_engine:
+        results = await search_engine.search(query)
+
+    return results
+
+
+@server.list_tools()
+async def handle_list_tools() -> list[Tool]:
+    """处理列出工具请求。
+
+    Returns:
+        工具列表
+    """
+    logger.info("列出可用工具")
+    return TOOLS
+
+
+@server.call_tool()
+async def handle_call_tool(
+    name: str, arguments: dict[str, Any] | None
+) -> list[TextContent]:
+    """处理工具调用请求。
+
+    Args:
+        name: 工具名称
+        arguments: 工具参数
+
+    Returns:
+        工具执行结果
+
+    Raises:
+        ValueError: 参数错误或工具不存在
+    """
+    logger.info(f"调用工具: {name}, 参数: {arguments}")
+
+    if name == "search":
+        return await handle_search(arguments or {})
+    elif name == "list_engines":
+        return await handle_list_engines()
+    else:
+        raise ValueError(f"未知的工具: {name}")
+
+
+async def handle_search(arguments: dict[str, Any]) -> list[TextContent]:
+    """处理搜索请求。
+
+    Args:
+        arguments: 搜索参数
+
+    Returns:
+        搜索结果
+
+    Raises:
+        ValueError: 参数错误
+    """
+    # 提取参数
+    query = arguments.get("query", "").strip()
+    engine = arguments.get("engine", "bing")
+    max_results = arguments.get("max_results", 5)
+
+    # 验证查询词
+    is_valid, error_msg = validate_query(query)
+    if not is_valid:
+        raise ValueError(error_msg)
+
+    logger.info(f"执行搜索: query='{query}', engine='{engine}', max_results={max_results}")
+
+    try:
+        # 执行搜索
+        results = await perform_search(query, engine, max_results)
+
+        # 格式化结果
+        engine_display_name = get_engine_display_name(SearchEngine(engine))
+        formatted_output = format_results_for_display(results, engine_display_name)
+
+        logger.info(f"搜索完成，返回 {len(results)} 个结果")
+
+        return [TextContent(type="text", text=formatted_output)]
+
+    except Exception as e:
+        error_message = f"搜索失败: {str(e)}"
+        logger.error(error_message)
+        return [TextContent(type="text", text=error_message)]
+
+
+async def handle_list_engines() -> list[TextContent]:
+    """处理列出搜索引擎请求。
+
+    Returns:
+        搜索引擎列表
+    """
+    engines_info = [
+        {
+            "name": "google",
+            "display_name": "Google",
+            "description": "全球最大的搜索引擎",
+        },
+        {
+            "name": "bing",
+            "display_name": "Bing",
+            "description": "微软搜索引擎，中文搜索效果较好",
+        },
+        {
+            "name": "yahoo",
+            "display_name": "Yahoo",
+            "description": "雅虎搜索引擎",
+        },
+        {
+            "name": "duckduckgo",
+            "display_name": "DuckDuckGo",
+            "description": "注重隐私的搜索引擎",
+        },
+    ]
+
+    output_lines = ["**可用的搜索引擎：**\n"]
+
+    for engine in engines_info:
+        output_lines.append(f"- **{engine['display_name']}** (`{engine['name']}`)")
+        output_lines.append(f"  {engine['description']}")
+        output_lines.append("")
+
+    output_lines.append("\n使用 `search` 工具时，通过 `engine` 参数指定搜索引擎。")
+
+    return [TextContent(type="text", text="\n".join(output_lines))]
+
+
+async def run_server() -> None:
+    """运行 MCP 服务器。"""
+    logger.info("启动 Search Engine MCP 服务器...")
+
+    async with stdio_server() as (read_stream, write_stream):
+        await server.run(
+            read_stream,
+            write_stream,
+            InitializationOptions(
+                server_name="search-engine-mcp",
+                server_version="1.0.0",
+                capabilities=server.get_capabilities(
+                    notification_options=NotificationOptions(),
+                    experimental_capabilities=None,
+                ),
+            ),
+        )
+
+
+def main() -> None:
+    """主入口函数。"""
+    setup_logging(level="DEBUG")
+
+    try:
+        asyncio.run(run_server())
+    except KeyboardInterrupt:
+        logger.info("服务器已停止")
+    except Exception as e:
+        import traceback
+        logger.error(f"服务器启动失败: {e}")
+        logger.error(traceback.format_exc())
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
