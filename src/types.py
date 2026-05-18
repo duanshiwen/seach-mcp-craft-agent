@@ -13,6 +13,7 @@ class SearchEngine(str, Enum):
     BING = "bing"
     YAHOO = "yahoo"
     DUCKDUCKGO = "duckduckgo"
+    BAIDU = "baidu"
 
 
 class SearchResult(BaseModel):

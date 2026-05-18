@@ -38,9 +38,9 @@ def setup_logging(level: str = "INFO", log_file: Optional[str] = None) -> None:
         root_logger.addHandler(file_handler)
 
     # 设置第三方库的日志级别
-    logging.getLogger("selenium").setLevel(logging.WARNING)
-    logging.getLogger("urllib3").setLevel(logging.WARNING)
-    logging.getLogger("undetected_chromedriver").setLevel(logging.WARNING)
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+    logging.getLogger("hpack").setLevel(logging.WARNING)
 
 
 def get_engine_display_name(engine: SearchEngine) -> str:
@@ -57,6 +57,7 @@ def get_engine_display_name(engine: SearchEngine) -> str:
         SearchEngine.BING: "Bing",
         SearchEngine.YAHOO: "Yahoo",
         SearchEngine.DUCKDUCKGO: "DuckDuckGo",
+        SearchEngine.BAIDU: "百度",
     }
     return display_names.get(engine, engine.value)
 

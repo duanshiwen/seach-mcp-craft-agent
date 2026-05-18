@@ -1,11 +1,9 @@
-"""DuckDuckGo 搜索引擎实现。"""
+"""DuckDuckGo 搜索引擎实现 - 使用 HTML 端点。"""
 
 import logging
 from urllib.parse import quote_plus
 
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.support.ui import WebDriverWait
+from selectolax.parser import HTMLParser
 
 from src.types import SearchEngine, SearchResult
 
@@ -15,9 +13,13 @@ logger = logging.getLogger(__name__)
 
 
 class DuckDuckGoSearchEngine(BaseSearchEngine):
-    """DuckDuckGo 搜索引擎实现。"""
+    """DuckDuckGo 搜索引擎实现。
 
-    BASE_URL = "https://duckduckgo.com"
+    使用 DuckDuckGo 的 HTML-only 端点 (https://html.duckduckgo.com/html/)，
+    该端点返回纯 HTML 结果，无需 JavaScript 渲染，适合自动化抓取。
+    """
+
+    BASE_URL = "https://html.duckduckgo.com/html/"
 
     def __init__(self, **kwargs):
         """初始化 DuckDuckGo 搜索引擎。"""
@@ -35,29 +37,14 @@ class DuckDuckGoSearchEngine(BaseSearchEngine):
         Raises:
             Exception: 搜索失败时抛出异常
         """
-        driver = self._get_driver()
-
         try:
-            # 构建搜索 URL
             encoded_query = quote_plus(query)
-            url = f"{self.BASE_URL}/?q={encoded_query}&kl=cn-zh&ia=web"
+            url = f"{self.BASE_URL}?q={encoded_query}"
 
             logger.info(f"正在搜索 DuckDuckGo: {query}")
-            driver.get(url)
+            html = await self._fetch_page(url)
 
-            # 模拟人类延迟
-            self._human_like_delay(2, 4)
-
-            # 等待搜索结果加载
-            WebDriverWait(driver, 10).until(
-                EC.presence_of_element_located(
-                    (By.CSS_SELECTOR, "[data-testid='result']")
-                )
-            )
-
-            # 解析结果
-            results = self._parse_results(driver)
-
+            results = self._parse_results(html)
             logger.info(f"DuckDuckGo 搜索完成，找到 {len(results)} 个结果")
             return results
 
@@ -65,77 +52,70 @@ class DuckDuckGoSearchEngine(BaseSearchEngine):
             logger.error(f"DuckDuckGo 搜索失败: {e}")
             raise
         finally:
-            self._close_driver()
+            await self._close_client()
 
-    def _parse_results(self, driver) -> list[SearchResult]:
-        """解析 DuckDuckGo 搜索结果页面。
+    def _parse_results(self, html: str) -> list[SearchResult]:
+        """解析 DuckDuckGo HTML 搜索结果。
 
         Args:
-            driver: 浏览器驱动实例
+            html: 页面 HTML 内容
 
         Returns:
             解析后的搜索结果列表
         """
         results = []
+        tree = HTMLParser(html)
 
-        try:
-            # DuckDuckGo 使用 data-testid 属性
-            result_elements = driver.find_elements(
-                By.CSS_SELECTOR, "[data-testid='result']"
-            )
+        # DuckDuckGo HTML 端点使用 .result 类
+        result_elements = tree.css(".result")
 
-            # 如果上面的选择器不起作用，尝试其他选择器
-            if not result_elements:
-                result_elements = driver.find_elements(
-                    By.CSS_SELECTOR, ".result, .nrn-react-div"
-                )
+        for element in result_elements[: self.max_results]:
+            try:
+                # 提取标题和链接
+                link_el = element.css_first(".result__a")
+                if not link_el:
+                    # 备用选择器
+                    link_el = element.css_first("a.result__url")
+                    if not link_el:
+                        link_el = element.css_first("a")
 
-            for i, element in enumerate(result_elements[: self.max_results]):
-                try:
-                    # 提取标题和链接
-                    link_element = element.find_element(
-                        By.CSS_SELECTOR,
-                        "[data-testid='result-title-a'], h2 a, .result__a"
-                    )
-                    title = link_element.text.strip()
-                    href = link_element.get_attribute("href")
-
-                    # 提取摘要
-                    abstract = ""
-                    try:
-                        abstract_element = element.find_element(
-                            By.CSS_SELECTOR,
-                            "[data-result='snippet'], .result__snippet, .snippet"
-                        )
-                        abstract = abstract_element.text.strip()
-                    except Exception:
-                        # 尝试其他摘要选择器
-                        try:
-                            abstract_element = element.find_element(
-                                By.CSS_SELECTOR,
-                                "span.st, div[data-testid='result-snippet']"
-                            )
-                            abstract = abstract_element.text.strip()
-                        except Exception:
-                            pass
-
-                    # 只添加有效的结果
-                    if title and href:
-                        results.append(
-                            SearchResult(
-                                title=title,
-                                href=href,
-                                abstract=abstract,
-                                source=SearchEngine.DUCKDUCKGO,
-                            )
-                        )
-                        logger.debug(f"解析结果 {i+1}: {title}")
-
-                except Exception as e:
-                    logger.warning(f"解析第 {i+1} 个结果时出错: {e}")
+                if not link_el:
                     continue
 
-        except Exception as e:
-            logger.error(f"解析 DuckDuckGo 搜索结果页面失败: {e}")
+                title = link_el.text(strip=True)
+
+                # DuckDuckGo HTML 版本的链接可能在 data-u 属性中
+                href = link_el.attributes.get("href", "")
+
+                # 有时链接是重定向格式，提取真实 URL
+                if "uddg=" in href:
+                    from urllib.parse import parse_qs, urlparse
+                    parsed = urlparse(href)
+                    qs = parse_qs(parsed.query)
+                    if "uddg" in qs:
+                        href = qs["uddg"][0]
+
+                # 提取摘要
+                abstract = ""
+                snippet_el = element.css_first(".result__snippet")
+                if not snippet_el:
+                    snippet_el = element.css_first(".result__body")
+                if snippet_el:
+                    abstract = snippet_el.text(strip=True)
+
+                if title and href:
+                    results.append(
+                        SearchResult(
+                            title=title,
+                            href=href,
+                            abstract=abstract,
+                            source=SearchEngine.DUCKDUCKGO,
+                        )
+                    )
+                    logger.debug(f"解析结果: {title}")
+
+            except Exception as e:
+                logger.warning(f"解析结果时出错: {e}")
+                continue
 
         return results

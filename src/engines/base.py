@@ -1,4 +1,4 @@
-"""搜索引擎基类 - 定义搜索引擎的通用接口和功能。"""
+"""搜索引擎基类 - 使用 HTTP 请求实现，无需浏览器驱动。"""
 
 import logging
 import random
@@ -6,9 +6,7 @@ import time
 from abc import ABC, abstractmethod
 from typing import Optional
 
-import undetected_chromedriver as uc
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.chrome.service import Service
+import httpx
 
 from src.types import SearchEngine, SearchResult
 
@@ -16,89 +14,95 @@ logger = logging.getLogger(__name__)
 
 # 常见的 User-Agent 列表
 USER_AGENTS = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0",
 ]
 
 
 class BaseSearchEngine(ABC):
-    """搜索引擎基类，提供通用的浏览器管理和搜索接口。"""
+    """搜索引擎基类，提供通用的 HTTP 客户端和搜索接口。"""
 
     def __init__(
         self,
         engine_type: SearchEngine,
-        headless: bool = True,
         max_results: int = 5,
-        timeout: int = 30,
+        timeout: int = 15,
     ):
         """初始化搜索引擎。
 
         Args:
             engine_type: 搜索引擎类型
-            headless: 是否使用无头模式
             max_results: 最大返回结果数量
-            timeout: 页面加载超时时间（秒）
+            timeout: 请求超时时间（秒）
         """
         self.engine_type = engine_type
-        self.headless = headless
         self.max_results = max_results
         self.timeout = timeout
-        self._driver: Optional[uc.Chrome] = None
+        self._client: Optional[httpx.AsyncClient] = None
 
-    def _get_chrome_options(self) -> Options:
-        """获取 Chrome 配置选项。
+    def _get_headers(self) -> dict[str, str]:
+        """获取 HTTP 请求头。
 
         Returns:
-            Chrome 选项对象
+            请求头字典
         """
-        options = uc.ChromeOptions()
-
-        if self.headless:
-            options.add_argument("--headless=new")
-
-        # 基础配置
-        options.add_argument("--no-sandbox")
-        options.add_argument("--disable-dev-shm-usage")
-        options.add_argument("--disable-gpu")
-        options.add_argument("--window-size=1920,1080")
-
-        # 随机 User-Agent
         user_agent = random.choice(USER_AGENTS)
-        options.add_argument(f"--user-agent={user_agent}")
+        return {
+            "User-Agent": user_agent,
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+            "Accept-Encoding": "gzip, deflate, br",
+            "DNT": "1",
+            "Connection": "keep-alive",
+            "Upgrade-Insecure-Requests": "1",
+            "Sec-Fetch-Dest": "document",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Site": "none",
+            "Sec-Fetch-User": "?1",
+            "Cache-Control": "max-age=0",
+        }
 
-        # 禁用自动化标志
-        options.add_argument("--disable-blink-features=AutomationControlled")
-
-        return options
-
-    def _get_driver(self) -> uc.Chrome:
-        """获取或创建浏览器驱动实例。
+    def _get_client(self) -> httpx.AsyncClient:
+        """获取或创建 HTTP 客户端实例。
 
         Returns:
-            Chrome 驱动实例
+            httpx 异步客户端
         """
-        if self._driver is None:
-            options = self._get_chrome_options()
-            self._driver = uc.Chrome(options=options)
-            self._driver.set_page_load_timeout(self.timeout)
-            logger.info(f"浏览器驱动已启动 ({self.engine_type.value})")
-        return self._driver
+        if self._client is None or self._client.is_closed:
+            self._client = httpx.AsyncClient(
+                headers=self._get_headers(),
+                timeout=httpx.Timeout(self.timeout),
+                follow_redirects=True,
+            )
+        return self._client
 
-    def _close_driver(self) -> None:
-        """关闭浏览器驱动实例。"""
-        if self._driver is not None:
-            try:
-                self._driver.quit()
-                logger.info(f"浏览器驱动已关闭 ({self.engine_type.value})")
-            except Exception as e:
-                logger.warning(f"关闭浏览器驱动时出错: {e}")
-            finally:
-                self._driver = None
+    async def _close_client(self) -> None:
+        """关闭 HTTP 客户端。"""
+        if self._client is not None and not self._client.is_closed:
+            await self._client.aclose()
+            self._client = None
 
-    def _human_like_delay(self, min_seconds: float = 1.0, max_seconds: float = 3.0) -> None:
+    async def _fetch_page(self, url: str) -> str:
+        """获取页面 HTML 内容。
+
+        Args:
+            url: 页面 URL
+
+        Returns:
+            HTML 内容字符串
+
+        Raises:
+            httpx.HTTPError: 请求失败
+        """
+        client = self._get_client()
+        response = await client.get(url)
+        response.raise_for_status()
+        return response.text
+
+    def _human_like_delay(self, min_seconds: float = 0.5, max_seconds: float = 1.5) -> None:
         """模拟人类操作延迟。
 
         Args:
@@ -123,26 +127,15 @@ class BaseSearchEngine(ABC):
         """
         pass
 
-    @abstractmethod
-    def _parse_results(self, driver: uc.Chrome) -> list[SearchResult]:
-        """解析搜索结果页面。
-
-        Args:
-            driver: 浏览器驱动实例
-
-        Returns:
-            解析后的搜索结果列表
-        """
-        pass
-
     async def __aenter__(self):
         """异步上下文管理器入口。"""
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         """异步上下文管理器出口。"""
-        self._close_driver()
+        await self._close_client()
 
     def __del__(self):
-        """析构函数，确保浏览器驱动被关闭。"""
-        self._close_driver()
+        """析构函数。"""
+        # Note: cannot await in __del__, client will be garbage collected
+        pass

@@ -15,6 +15,7 @@ from mcp.types import (
 )
 
 from src.engines import (
+    BaiduSearchEngine,
     BingSearchEngine,
     DuckDuckGoSearchEngine,
     GoogleSearchEngine,
@@ -40,7 +41,7 @@ TOOLS = [
         name="search",
         description=(
             "通过指定搜索引擎查询信息，返回结构化的搜索结果。"
-            "支持 Google、Bing、Yahoo、DuckDuckGo 四个搜索引擎。"
+            "支持 Bing、DuckDuckGo、Yahoo、百度四个搜索引擎（Google 需要 JS 渲染暂不支持）。"
             "适合获取实时信息，如天气、新闻、最新资讯等。"
         ),
         inputSchema={
@@ -54,9 +55,9 @@ TOOLS = [
                 },
                 "engine": {
                     "type": "string",
-                    "enum": ["google", "bing", "yahoo", "duckduckgo"],
-                    "default": "bing",
-                    "description": "搜索引擎选择（默认: bing）",
+                    "enum": ["google", "bing", "yahoo", "duckduckgo", "baidu"],
+                    "default": "duckduckgo",
+                    "description": "搜索引擎选择（默认: duckduckgo）",
                 },
                 "max_results": {
                     "type": "integer",
@@ -98,17 +99,18 @@ def get_search_engine(engine_name: str, max_results: int = 5) -> Any:
         "bing": BingSearchEngine,
         "yahoo": YahooSearchEngine,
         "duckduckgo": DuckDuckGoSearchEngine,
+        "baidu": BaiduSearchEngine,
     }
 
     engine_class = engine_map.get(engine_name.lower())
     if not engine_class:
         raise ValueError(f"不支持的搜索引擎: {engine_name}")
 
-    return engine_class(max_results=max_results, headless=True)
+    return engine_class(max_results=max_results)
 
 
 async def perform_search(
-    query: str, engine: str = "bing", max_results: int = 5
+    query: str, engine: str = "duckduckgo", max_results: int = 5
 ) -> list[SearchResult]:
     """执行搜索操作。
 
@@ -182,7 +184,7 @@ async def handle_search(arguments: dict[str, Any]) -> list[TextContent]:
     """
     # 提取参数
     query = arguments.get("query", "").strip()
-    engine = arguments.get("engine", "bing")
+    engine = arguments.get("engine", "duckduckgo")
     max_results = arguments.get("max_results", 5)
 
     # 验证查询词
@@ -195,6 +197,19 @@ async def handle_search(arguments: dict[str, Any]) -> list[TextContent]:
     try:
         # 执行搜索
         results = await perform_search(query, engine, max_results)
+
+        # 如果 Google 返回空结果，提供提示
+        if not results and engine == "google":
+            return [TextContent(
+                type="text",
+                text=(
+                    "Google 搜索需要 JavaScript 渲染，当前不支持。"
+                    "请尝试使用其他搜索引擎：\n"
+                    "- `duckduckgo`（推荐，稳定可靠）\n"
+                    "- `bing`（中文效果好）\n"
+                    "- `yahoo`（综合搜索）"
+                ),
+            )]
 
         # 格式化结果
         engine_display_name = get_engine_display_name(SearchEngine(engine))
@@ -220,7 +235,7 @@ async def handle_list_engines() -> list[TextContent]:
         {
             "name": "google",
             "display_name": "Google",
-            "description": "全球最大的搜索引擎",
+            "description": "全球最大的搜索引擎（需要 JS 渲染，暂不支持）",
         },
         {
             "name": "bing",
@@ -236,6 +251,11 @@ async def handle_list_engines() -> list[TextContent]:
             "name": "duckduckgo",
             "display_name": "DuckDuckGo",
             "description": "注重隐私的搜索引擎",
+        },
+        {
+            "name": "baidu",
+            "display_name": "百度",
+            "description": "中文搜索引擎，适合中文内容搜索",
         },
     ]
 

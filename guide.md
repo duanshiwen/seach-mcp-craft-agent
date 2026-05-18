@@ -1,13 +1,13 @@
 # 搜索引擎 MCP
 
-免费的多搜索引擎 API 工具，支持 Google、Bing、Yahoo、DuckDuckGo 四个主流搜索引擎。
+免费的多搜索引擎 API 工具，支持 Bing、DuckDuckGo、Yahoo、百度四个搜索引擎（Google 需要 JS 渲染，暂不支持）。
 
 ## 功能特性
 
-- **多引擎支持**：可在四个搜索引擎之间切换
+- **多引擎支持**：可在三个搜索引擎之间切换
 - **结构化输出**：返回标题、链接、摘要的标准格式
 - **完全免费**：无需 API 密钥或付费订阅
-- **反检测**：使用先进技术绕过反爬虫检测
+- **HTTP 请求**：使用 HTTP 请求直接获取结果，无需浏览器驱动
 
 ## 使用方法
 
@@ -19,18 +19,19 @@
 ```json
 {
   "query": "深圳市天气",
-  "engine": "bing",
+  "engine": "duckduckgo",
   "max_results": 5
 }
 ```
 
 **参数说明：**
 - `query`（必填）：搜索查询关键词
-- `engine`（可选）：搜索引擎选择，默认 `bing`
-  - `google` - Google 搜索
-  - `bing` - Bing 搜索（推荐，中文效果好）
+- `engine`（可选）：搜索引擎选择，默认 `duckduckgo`
+  - `bing` - Bing 搜索（中文效果好）
+  - `duckduckgo` - DuckDuckGo 搜索（推荐，稳定可靠）
   - `yahoo` - Yahoo 搜索
-  - `duckduckgo` - DuckDuckGo 搜索（注重隐私）
+  - `baidu` - 百度搜索（中文内容搜索）
+  - `google` - Google 搜索（需要 JS 渲染，暂不支持）
 - `max_results`（可选）：返回结果数量，默认 5，最大 10
 
 ### 列出搜索引擎
@@ -50,7 +51,7 @@
 ```json
 {
   "query": "今天深圳天气",
-  "engine": "bing"
+  "engine": "duckduckgo"
 }
 ```
 
@@ -61,7 +62,7 @@
 ```json
 {
   "query": "Python asyncio 教程",
-  "engine": "google",
+  "engine": "bing",
   "max_results": 10
 }
 ```
@@ -82,7 +83,7 @@
 搜索结果以 Markdown 格式返回，包含：
 
 ```
-**Bing 搜索结果：**
+**DuckDuckGo 搜索结果：**
 
 1. **标题**
    链接: https://example.com/...
@@ -97,10 +98,11 @@
 
 ### 1. 选择合适的搜索引擎
 
-- **Bing**：中文搜索效果较好，推荐日常使用
-- **Google**：全球搜索，英文内容丰富
-- **DuckDuckGo**：注重隐私，无追踪
-- **Yahoo**：综合搜索，界面简洁
+- **DuckDuckGo**（推荐）：稳定可靠，HTML 端点，无 CAPTCHA
+- **百度**：中文内容搜索效果好，适合国内搜索
+- **Bing**：中文搜索效果好，偶尔有 CAPTCHA
+- **Yahoo**：综合搜索，结果质量中等
+- **Google**：需要 JS 渲染，暂不支持
 
 ### 2. 优化搜索词
 
@@ -142,8 +144,8 @@
 
 - **传输协议**：stdio（标准输入输出）
 - **认证方式**：无认证（公开服务）
-- **浏览器引擎**：Chrome（undetected-chromedriver）
-- **响应时间**：通常 3-10 秒（取决于网络和搜索引擎）
+- **请求方式**：HTTP 请求（httpx + selectolax）
+- **响应时间**：通常 1-3 秒（取决于网络和搜索引擎）
 
 ## 集成示例
 
@@ -156,7 +158,7 @@ Agent：我来帮您查询深圳的天气信息。
 ```json
 {
   "query": "今天深圳天气",
-  "engine": "bing",
+  "engine": "duckduckgo",
   "max_results": 5
 }
 ```
@@ -170,14 +172,14 @@ Agent：我来帮您查询深圳的天气信息。
 ```json
 {
   "query": "深圳天气",
-  "engine": "bing"
+  "engine": "duckduckgo"
 }
 ```
 
 ```json
 {
   "query": "深圳新闻",
-  "engine": "google"
+  "engine": "bing"
 }
 ```
 
@@ -188,7 +190,7 @@ Agent：我来帮您查询深圳的天气信息。
 **可能原因：**
 - 网络连接问题
 - 搜索引擎暂时不可用
-- 浏览器驱动问题
+- 页面结构变化
 
 **解决方案：**
 1. 检查网络连接
@@ -207,6 +209,12 @@ Agent：我来帮您查询深圳的天气信息。
 3. 增加结果数量以获取更多选项
 
 ## 更新日志
+
+### v1.1.0 (2026-05-17)
+- 重写为 HTTP 请求方式（httpx + selectolax）
+- 移除浏览器驱动依赖（undetected-chromedriver、selenium）
+- Google 搜索暂不支持（需要 JS 渲染）
+- 提升稳定性和响应速度
 
 ### v1.0.0 (2026-05-17)
 - 初始版本发布
