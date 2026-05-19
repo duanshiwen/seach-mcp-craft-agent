@@ -21,6 +21,7 @@ from src.engines import (
     GoogleSearchEngine,
     YahooSearchEngine,
 )
+from src.fetcher import fetch_url
 from src.types import SearchEngine, SearchResult
 from src.utils import (
     format_results_for_display,
@@ -76,6 +77,56 @@ TOOLS = [
         inputSchema={
             "type": "object",
             "properties": {},
+        },
+    ),
+    Tool(
+        name="web_fetch",
+        description=(
+            "获取指定 URL 的网页正文内容，提取为 AI 友好的 Markdown 格式。"
+            "自动去除广告、导航栏、页脚等干扰内容，保留核心正文。"
+            "适用于需要深入阅读搜索结果页面内容的场景。"
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "要获取内容的完整网页 URL",
+                    "format": "uri",
+                },
+                "extract_mode": {
+                    "type": "string",
+                    "enum": ["markdown", "text"],
+                    "default": "markdown",
+                    "description": (
+                        "输出格式：markdown（默认，保留标题/链接/表格等格式）"
+                        "或 text（纯文本，无格式标记）"
+                    ),
+                },
+                "render_mode": {
+                    "type": "string",
+                    "enum": ["auto", "http", "js"],
+                    "default": "auto",
+                    "description": (
+                        "渲染模式：auto（默认，先 HTTP，必要时自动 JS 渲染）、"
+                        "http（强制轻量 HTTP）、js（强制 Playwright/Chromium 渲染）"
+                    ),
+                },
+                "wait_until": {
+                    "type": "string",
+                    "enum": ["load", "domcontentloaded", "networkidle", "commit"],
+                    "default": "networkidle",
+                    "description": "JS 渲染时的页面等待策略，默认 networkidle",
+                },
+                "timeout_ms": {
+                    "type": "integer",
+                    "minimum": 3000,
+                    "maximum": 120000,
+                    "default": 30000,
+                    "description": "请求或 JS 渲染超时时间（毫秒），默认 30000",
+                },
+            },
+            "required": ["url"],
         },
     ),
 ]
@@ -166,6 +217,8 @@ async def handle_call_tool(
         return await handle_search(arguments or {})
     elif name == "list_engines":
         return await handle_list_engines()
+    elif name == "web_fetch":
+        return await handle_web_fetch(arguments or {})
     else:
         raise ValueError(f"未知的工具: {name}")
 
@@ -269,6 +322,52 @@ async def handle_list_engines() -> list[TextContent]:
     output_lines.append("\n使用 `search` 工具时，通过 `engine` 参数指定搜索引擎。")
 
     return [TextContent(type="text", text="\n".join(output_lines))]
+
+
+async def handle_web_fetch(arguments: dict[str, Any]) -> list[TextContent]:
+    """处理网页内容获取请求。
+
+    Args:
+        arguments: 工具参数
+
+    Returns:
+        提取的网页内容
+    """
+    url = arguments.get("url", "").strip()
+    extract_mode = arguments.get("extract_mode", "markdown")
+    render_mode = arguments.get("render_mode", "auto")
+    wait_until = arguments.get("wait_until", "networkidle")
+    timeout_ms = arguments.get("timeout_ms", 30000)
+
+    if not url:
+        raise ValueError("URL 参数不能为空")
+
+    if extract_mode not in ("markdown", "text"):
+        raise ValueError(f"不支持的提取模式: {extract_mode}，可选: markdown, text")
+
+    if render_mode not in ("auto", "http", "js"):
+        raise ValueError(f"不支持的渲染模式: {render_mode}，可选: auto, http, js")
+
+    if wait_until not in ("load", "domcontentloaded", "networkidle", "commit"):
+        raise ValueError(
+            f"不支持的等待策略: {wait_until}，可选: load, domcontentloaded, networkidle, commit"
+        )
+
+    logger.info(
+        f"获取网页内容: url='{url}', mode='{extract_mode}', "
+        f"render='{render_mode}', wait_until='{wait_until}', timeout_ms={timeout_ms}"
+    )
+
+    try:
+        content = await fetch_url(url, extract_mode, render_mode, wait_until, timeout_ms)
+        logger.info(f"网页内容获取成功，长度: {len(content)} 字符")
+        return [TextContent(type="text", text=content)]
+    except ValueError as e:
+        raise e
+    except Exception as e:
+        error_message = f"获取网页内容失败: {str(e)}"
+        logger.error(error_message)
+        return [TextContent(type="text", text=error_message)]
 
 
 async def run_server() -> None:

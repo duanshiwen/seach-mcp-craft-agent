@@ -42,6 +42,37 @@
 {}
 ```
 
+### 获取网页内容
+
+使用 `web_fetch` 工具获取指定 URL 的正文内容，自动转为 AI 友好的 Markdown 格式：
+
+**基本用法：**
+```json
+{
+  "url": "https://example.com/article"
+}
+```
+
+**参数说明：**
+- `url`（必填）：要获取的完整网页 URL
+- `extract_mode`（可选）：输出格式，默认 `markdown`
+  - `markdown` - 保留标题、链接、表格等 Markdown 格式（推荐）
+  - `text` - 纯文本，无格式标记
+- `render_mode`（可选）：渲染模式，默认 `auto`
+  - `auto` - 先用轻量 HTTP 提取；检测到 JS-only 页面时自动 fallback 到浏览器渲染
+  - `http` - 强制轻量 HTTP 模式，速度最快
+  - `js` - 强制 Playwright/Chromium 渲染，适合 SPA 或需要 JavaScript 的页面
+- `wait_until`（可选）：JS 渲染等待策略，默认 `networkidle`
+  - 可选：`load`、`domcontentloaded`、`networkidle`、`commit`
+- `timeout_ms`（可选）：请求或渲染超时时间，默认 `30000`，范围 3000-120000 毫秒
+
+**特性：**
+- 🧹 自动去除广告、导航栏、页脚等干扰内容
+- 📝 智能提取正文，保留核心信息
+- 🔗 支持保留超链接和表格结构
+- 🧩 支持 JS 渲染页面（SPA / React / Vue 等）
+- 📊 内容过长时自动截断（10 万字符上限）
+
 ## 使用场景
 
 ### 1. 获取实时信息
@@ -54,6 +85,52 @@
   "engine": "duckduckgo"
 }
 ```
+
+### 4. 深入阅读搜索结果
+
+先搜索找到相关页面，再获取完整内容：
+
+**第一步：搜索**
+```json
+{
+  "query": "Python asyncio 最佳实践",
+  "engine": "duckduckgo",
+  "max_results": 5
+}
+```
+
+**第二步：获取感兴趣的文章全文**
+```json
+{
+  "url": "https://搜索结果中的某个链接"
+}
+```
+
+### 5. 获取纯文本（无格式）
+
+适合需要纯文本分析的场景：
+
+```json
+{
+  "url": "https://example.com/article",
+  "extract_mode": "text"
+}
+```
+
+### 6. 获取需要 JavaScript 渲染的网页
+
+默认 `auto` 会自动检测并 fallback 到 JS 渲染；也可以强制使用 `js`：
+
+```json
+{
+  "url": "https://example.com/spa-article",
+  "render_mode": "js",
+  "wait_until": "networkidle",
+  "timeout_ms": 45000
+}
+```
+
+**注意：** JS 渲染比 HTTP 模式更慢、更耗资源；遇到登录墙、强反爬、Cloudflare 等情况仍可能失败。
 
 ### 2. 技术问题查询
 
@@ -209,6 +286,17 @@ Agent：我来帮您查询深圳的天气信息。
 3. 增加结果数量以获取更多选项
 
 ## 更新日志
+
+### v1.3.0 (2026-05-19)
+- `web_fetch` 新增 JavaScript 渲染能力，支持 Playwright/Chromium
+- 新增 `render_mode` 参数：`auto`、`http`、`js`
+- 新增 `wait_until` 与 `timeout_ms` 参数，控制 JS 渲染等待策略和超时
+- 默认 `auto` 模式会先走快速 HTTP 提取，检测到 JS-only 页面时自动 fallback 到 JS 渲染
+
+### v1.2.0 (2026-05-19)
+- 新增 `web_fetch` 工具，获取 URL 正文并转为 AI 友好的 Markdown
+- 基于 trafilatura 智能提取，自动去除广告和噪声
+- 支持 markdown 和 text 两种输出模式
 
 ### v1.1.0 (2026-05-17)
 - 重写为 HTTP 请求方式（httpx + selectolax）
