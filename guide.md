@@ -1,6 +1,6 @@
 # 搜索引擎 MCP
 
-免费的多搜索引擎 API 工具，支持 Google、Bing、DuckDuckGo、Yahoo、百度五个搜索引擎。Google 使用 Playwright JS 渲染以绕过 CAPTCHA，其他引擎使用轻量 HTTP 请求。
+免费的多搜索引擎 API 工具，支持 Google、Bing、DuckDuckGo、Yahoo、百度五个搜索引擎。Google 使用 Playwright JS 渲染 + 语义结构解析（基于 h3 标题 + a 链接，不依赖 CSS 类名），其他引擎使用轻量 HTTP 请求。
 
 ## 功能特性
 
@@ -226,8 +226,17 @@
 
 - **传输协议**：stdio（标准输入输出）
 - **认证方式**：无认证（公开服务）
-- **请求方式**：HTTP 请求（httpx + selectolax）
-- **响应时间**：通常 1-3 秒（取决于网络和搜索引擎）
+- **请求方式**：
+  - DuckDuckGo/Bing/Yahoo/百度：HTTP 请求（httpx + selectolax）
+  - Google：Playwright JS 渲染 + 语义结构解析
+- **Google 解析策略**：基于 #main 容器 + h3 标题 + a 链接的语义结构，不依赖特定 CSS 类名（如 div.g, div.tF2Cxc 等）
+  - `#main`：稳定的主容器（ID 属性，非 class），所有搜索结果都在此容器内
+  - `h3`：Google 搜索结果标题始终使用 h3 标签
+  - `a`：标题被包裹在 a 链接标签中
+  - 自动提取真实 URL（处理 Google 重定向）
+- **响应时间**：
+  - HTTP 引擎：1-3 秒
+  - Google（JS 渲染）：3-5 秒
 
 ## 集成示例
 
@@ -293,9 +302,15 @@ Agent：我来帮您查询深圳的天气信息。
 ## 更新日志
 
 ### v1.4.0 (2026-05-22)
-- **重大更新**：Google 搜索改用 Playwright JS 渲染，大幅提高成功率
-- 修正错误提示信息，更准确地描述 Google 搜索的问题
-- 更新文档说明各引擎的渲染方式
+- **重大更新**：Google 搜索改用 Playwright JS 渲染，成功绕过 CAPTCHA
+- **解析策略重构**：
+  - 使用 `#main` 作为稳定容器（ID 属性，非 class）
+  - 在 `#main` 内查找 `h3` 标题 + `a` 链接
+  - 不依赖特定 CSS 类名（div.g, div.tF2Cxc 等都可能变化）
+  - 自动处理 Google 重定向 URL，提取真实链接
+- 修正错误提示信息
+- 更新文档说明各引擎的渲染方式和解析策略
+- **验证结果**：Google 搜索现已完全可用，可返回 10+ 结果
 
 ### v1.3.0 (2026-05-19)
 - `web_fetch` 新增 JavaScript 渲染能力，支持 Playwright/Chromium

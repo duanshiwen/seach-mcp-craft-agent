@@ -41,10 +41,13 @@ TOOLS = [
     Tool(
         name="search",
         description=(
-            "通过指定搜索引擎查询信息，返回结构化的搜索结果。"
-            "支持 Google、Bing、DuckDuckGo、Yahoo、百度五个搜索引擎。"
-            "注意：Google 可能被 CAPTCHA 拦截，推荐使用 DuckDuckGo 或 Bing。"
-            "适合获取实时信息，如天气、新闻、最新资讯等。"
+            "通过指定搜索引擎查询信息，返回结构化的搜索结果。支持 Google、Bing、DuckDuckGo、Yahoo、百度五个搜索引擎。\n"
+            "- DuckDuckGo（默认）：稳定可靠，轻量 HTTP，速度快\n"
+            "- Bing：中文搜索效果好，轻量 HTTP\n"
+            "- Google：结果最全，Playwright JS 渲染，较慢（3-5秒）\n"
+            "- 百度：国内内容搜索，轻量 HTTP\n"
+            "- Yahoo：综合搜索，轻量 HTTP\n"
+            "适合获取实时信息，如天气、新闻、最新资讯、技术文档等。"
         ),
         inputSchema={
             "type": "object",
@@ -59,7 +62,7 @@ TOOLS = [
                     "type": "string",
                     "enum": ["google", "bing", "yahoo", "duckduckgo", "baidu"],
                     "default": "duckduckgo",
-                    "description": "搜索引擎选择（默认: duckduckgo）",
+                    "description": "搜索引擎选择。duckduckgo（默认，稳定快速）、bing（中文优化）、google（结果最全，JS渲染较慢）、baidu（国内内容）、yahoo（综合搜索）",
                 },
                 "max_results": {
                     "type": "integer",
@@ -83,9 +86,10 @@ TOOLS = [
     Tool(
         name="web_fetch",
         description=(
-            "获取指定 URL 的网页正文内容，提取为 AI 友好的 Markdown 格式。"
-            "自动去除广告、导航栏、页脚等干扰内容，保留核心正文。"
-            "适用于需要深入阅读搜索结果页面内容的场景。"
+            "获取指定 URL 的网页正文内容，提取为 AI 友好的 Markdown 格式。\n"
+            "特性：自动去除广告/导航栏/页脚等干扰，保留核心正文；支持表格和链接；\n"
+            "支持三种渲染模式：auto（自动）、http（轻量快速）、js（Playwright 渲染 SPA 页面）。\n"
+            "适用于深入阅读搜索结果、抓取文章全文、提取网页结构化内容。"
         ),
         inputSchema={
             "type": "object",

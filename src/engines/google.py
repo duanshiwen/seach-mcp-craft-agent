@@ -1,10 +1,15 @@
-"""Google 搜索引擎实现 - 使用 Playwright JS 渲染绕过 CAPTCHA。"""
+"""Google 搜索引擎实现 - 使用 Playwright JS 渲染 + 语义结构解析。
+
+解析策略：
+- 基于 h3 标题 + a 链接的语义结构提取结果
+- 不依赖特定的 CSS 类名（如 div.g, div.tF2Cxc 等）
+- 自动处理 Google 重定向 URL
+- 通过 Playwright JS 渲染绕过 CAPTCHA
+"""
 
 import logging
 import random
-from urllib.parse import quote_plus
-
-from selectolax.parser import HTMLParser
+from urllib.parse import quote_plus, urlparse, parse_qs
 
 from src.types import SearchEngine, SearchResult
 
@@ -12,12 +17,96 @@ from .base import BaseSearchEngine
 
 logger = logging.getLogger(__name__)
 
+# 在页面中执行的 JavaScript 提取逻辑
+# 基于语义结构：#main 容器 + h3 标题 + a 链接
+# 不依赖特定 CSS 类名（如 div.g, div.tF2Cxc 等）
+EXTRACT_RESULTS_JS = """
+() => {
+    const results = [];
+    const seen = new Set();
+    
+    // 在 #main 容器内查找 h3（Google 搜索结果的稳定容器）
+    const mainContainer = document.querySelector('#main');
+    if (!mainContainer) return results;
+    
+    const h3s = mainContainer.querySelectorAll('h3');
+    
+    for (const h3 of h3s) {
+        // 1. 获取标题
+        const title = h3.innerText?.trim();
+        if (!title || title.length < 3) continue;
+        
+        // 2. 向上查找包含此 h3 的链接 <a>
+        let linkEl = null;
+        let current = h3;
+        for (let i = 0; i < 6; i++) {
+            current = current.parentElement;
+            if (!current) break;
+            if (current.tagName === 'A') {
+                linkEl = current;
+                break;
+            }
+        }
+        
+        if (!linkEl) continue;
+        
+        // 3. 获取链接 URL
+        let href = linkEl.href;
+        if (!href) continue;
+        
+        // 4. 从 Google 重定向 URL 中提取真实 URL
+        if (href.includes('google.com/url')) {
+            try {
+                const urlObj = new URL(href);
+                const realUrl = urlObj.searchParams.get('q');
+                if (realUrl) href = realUrl;
+            } catch(e) {}
+        }
+        
+        // 5. 过滤非 http 链接和 Google 内部链接
+        if (!href.startsWith('http')) continue;
+        if (href.includes('google.com/search') || 
+            href.includes('accounts.google') ||
+            href.includes('google.com/preferences') ||
+            href.includes('google.com/maps')) continue;
+        
+        // 6. 去重
+        if (seen.has(href)) continue;
+        seen.add(href);
+        
+        // 7. 获取摘要文本
+        let abstract = '';
+        const container = linkEl.parentElement || linkEl;
+        const candidates = container.querySelectorAll('span, div');
+        for (const node of candidates) {
+            const text = node.innerText?.trim();
+            if (text && 
+                text.length > 30 && 
+                text !== title && 
+                !text.startsWith('http') &&
+                !text.includes('›') &&
+                !text.includes('...') &&
+                text.length < 500) {
+                abstract = text.substring(0, 300);
+                break;
+            }
+        }
+        
+        results.push({ title, href, abstract });
+    }
+    
+    return results;
+}
+"""
+
 
 class GoogleSearchEngine(BaseSearchEngine):
-    """Google 搜索引擎实现 - 使用 JS 渲染。
+    """Google 搜索引擎实现 - 使用 Playwright JS 渲染。
 
-    Google 的反爬虫机制较强，HTTP 请求容易被 CAPTCHA 拦截。
-    此实现使用 Playwright 进行真实浏览器渲染，可大幅提高成功率。
+    特点：
+    - 使用 Playwright 进行真实浏览器渲染，绕过 CAPTCHA
+    - 基于语义结构（h3 + a）解析结果，不依赖特定 CSS 类名
+    - 自动处理 Google 重定向 URL
     """
 
     BASE_URL = "https://www.google.com/search"
@@ -81,17 +170,23 @@ class GoogleSearchEngine(BaseSearchEngine):
             encoded_query = quote_plus(query)
             url = f"{self.BASE_URL}?q={encoded_query}&hl=zh-CN&gl=cn"
 
-            logger.info(f"正在搜索 Google (JS 渲染): {query}")
+            logger.info(f"正在搜索 Google (Playwright): {query}")
 
-            # 使用 Playwright 进行 JS 渲染
-            html = await self._fetch_page_with_js(url)
+            # 使用 Playwright 渲染并提取结果
+            raw_results = await self._fetch_and_extract(url)
 
-            # 检查是否被 CAPTCHA 拦截
-            if self._is_blocked(html):
-                logger.warning("Google 返回了验证页面 (CAPTCHA)")
-                return []
+            # 转换为 SearchResult 对象
+            results = []
+            for item in raw_results[:self.max_results]:
+                results.append(
+                    SearchResult(
+                        title=item["title"],
+                        href=item["href"],
+                        abstract=item.get("abstract", ""),
+                        source=SearchEngine.GOOGLE,
+                    )
+                )
 
-            results = self._parse_results(html)
             logger.info(f"Google 搜索完成，找到 {len(results)} 个结果")
             return results
 
@@ -101,23 +196,20 @@ class GoogleSearchEngine(BaseSearchEngine):
         finally:
             await self._close_browser()
 
-    async def _fetch_page_with_js(self, url: str) -> str:
-        """使用 Playwright 获取页面内容。
+    async def _fetch_and_extract(self, url: str) -> list[dict]:
+        """使用 Playwright 获取页面并提取搜索结果。
 
         Args:
-            url: 页面 URL
+            url: Google 搜索 URL
 
         Returns:
-            渲染后的 HTML 内容
+            原始结果字典列表
         """
         await self._init_browser()
 
-        # 创建新的浏览器上下文，模拟真实用户
+        # 创建浏览器上下文
         context = await self._browser.new_context(
-            user_agent=random.choice(self.USER_AGENTS if hasattr(self, 'USER_AGENTS') else [
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-            ]),
+            user_agent=random.choice(self._get_user_agents()),
             viewport={"width": 1366, "height": 900},
             locale="zh-CN",
             timezone_id="Asia/Shanghai",
@@ -148,18 +240,29 @@ class GoogleSearchEngine(BaseSearchEngine):
             if not response or response.status != 200:
                 logger.warning(f"Google 返回状态码: {response.status if response else 'None'}")
 
-            # 等待页面加载完成
+            # 等待页面加载
             await page.wait_for_timeout(random.randint(1000, 2000))
 
-            # 获取渲染后的 HTML
+            # 检查是否被 CAPTCHA 拦截
             html = await page.content()
-            return html
+            if self._is_blocked(html):
+                logger.warning("Google 返回了验证页面 (CAPTCHA)")
+                return []
+
+            # 使用 JavaScript 提取结果
+            results = await page.evaluate(EXTRACT_RESULTS_JS)
+            logger.info(f"从页面提取到 {len(results)} 个结果")
+
+            return results
 
         finally:
             await context.close()
 
     def _is_blocked(self, html: str) -> bool:
         """检测页面是否被 Google 拦截。
+
+        正常的搜索结果页面会有 #main 容器和 h3 标题。
+        CAPTCHA 页面通常没有这些元素，或者包含特定的拦截标识。
 
         Args:
             html: 页面 HTML 内容
@@ -168,87 +271,33 @@ class GoogleSearchEngine(BaseSearchEngine):
             是否被拦截
         """
         lower = html.lower()
-        # Google 的 CAPTCHA/拦截页面特征
+        
+        # CAPTCHA/拦截页面的特征
         block_indicators = [
             "sorry/index",
             "captcha",
             "unusual traffic",
             "automated queries",
-            "robot",
             "检测到异常流量",
             "unusual traffic from your computer",
         ]
         has_block = any(ind in lower for ind in block_indicators)
-        # 同时检查是否有正常搜索结果
-        has_results = "id=\"search\"" in html or "id=\"rso\"" in html
-        return has_block and not has_results
+        
+        # 正常页面的特征：有 #main 容器
+        has_main = 'id="main"' in lower
+        
+        # 如果有拦截特征且没有 #main，说明被拦截
+        return has_block and not has_main
 
-    def _parse_results(self, html: str) -> list[SearchResult]:
-        """解析 Google 搜索结果页面。
-
-        Args:
-            html: 页面 HTML 内容
+    def _get_user_agents(self) -> list[str]:
+        """获取 User-Agent 列表。
 
         Returns:
-            解析后的搜索结果列表
+            User-Agent 字符串列表
         """
-        results = []
-        tree = HTMLParser(html)
-
-        # Google 搜索结果在 #search 下的 .g 或 #rso 下的 div
-        result_elements = tree.css("#search .g")
-
-        if not result_elements:
-            result_elements = tree.css("#rso .g")
-
-        if not result_elements:
-            # 更宽泛的选择器
-            result_elements = tree.css("div.g")
-
-        for element in result_elements[: self.max_results]:
-            try:
-                # 提取标题
-                title_el = element.css_first("h3")
-                if not title_el:
-                    continue
-                title = title_el.text(strip=True)
-
-                # 提取链接
-                link_el = element.css_first("a")
-                if not link_el:
-                    continue
-                href = link_el.attributes.get("href", "")
-
-                # 过滤掉非 http 链接（如 Google 内部链接）
-                if not href.startswith("http"):
-                    continue
-
-                # 提取摘要
-                abstract = ""
-                for selector in [".VwiC3b", ".IsZvec", ".s3v9rd", "span.st"]:
-                    abstract_el = element.css_first(selector)
-                    if abstract_el:
-                        abstract = abstract_el.text(strip=True)
-                        break
-
-                if title and href:
-                    results.append(
-                        SearchResult(
-                            title=title,
-                            href=href,
-                            abstract=abstract,
-                            source=SearchEngine.GOOGLE,
-                        )
-                    )
-                    logger.debug(f"解析结果: {title}")
-
-            except Exception as e:
-                logger.warning(f"解析结果时出错: {e}")
-                continue
-
-        return results
-
-    def __del__(self):
-        """析构函数 - 确保浏览器被关闭。"""
-        # Note: cannot await in __del__, but try to cleanup
-        pass
+        return [
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15",
+        ]
