@@ -1,13 +1,13 @@
 # 搜索引擎 MCP
 
-免费的多搜索引擎 API 工具，支持 Bing、DuckDuckGo、Yahoo、百度四个搜索引擎（Google 需要 JS 渲染，暂不支持）。
+免费的多搜索引擎 API 工具，支持 Google、Bing、DuckDuckGo、Yahoo、百度五个搜索引擎。Google 使用 Playwright JS 渲染以绕过 CAPTCHA，其他引擎使用轻量 HTTP 请求。
 
 ## 功能特性
 
-- **多引擎支持**：可在三个搜索引擎之间切换
+- **多引擎支持**：可在五个搜索引擎之间切换
 - **结构化输出**：返回标题、链接、摘要的标准格式
 - **完全免费**：无需 API 密钥或付费订阅
-- **HTTP 请求**：使用 HTTP 请求直接获取结果，无需浏览器驱动
+- **智能渲染**：Google 使用 Playwright JS 渲染，其他引擎使用 HTTP 请求
 
 ## 使用方法
 
@@ -27,11 +27,11 @@
 **参数说明：**
 - `query`（必填）：搜索查询关键词
 - `engine`（可选）：搜索引擎选择，默认 `duckduckgo`
-  - `bing` - Bing 搜索（中文效果好）
-  - `duckduckgo` - DuckDuckGo 搜索（推荐，稳定可靠）
-  - `yahoo` - Yahoo 搜索
-  - `baidu` - 百度搜索（中文内容搜索）
-  - `google` - Google 搜索（需要 JS 渲染，暂不支持）
+  - `duckduckgo` - DuckDuckGo 搜索（推荐，稳定可靠，轻量 HTTP）
+  - `bing` - Bing 搜索（中文效果好，轻量 HTTP）
+  - `google` - Google 搜索（Playwright JS 渲染，结果最全但较慢）
+  - `yahoo` - Yahoo 搜索（轻量 HTTP）
+  - `baidu` - 百度搜索（中文内容搜索，轻量 HTTP）
 - `max_results`（可选）：返回结果数量，默认 5，最大 10
 
 ### 列出搜索引擎
@@ -175,11 +175,16 @@
 
 ### 1. 选择合适的搜索引擎
 
-- **DuckDuckGo**（推荐）：稳定可靠，HTML 端点，无 CAPTCHA
+- **DuckDuckGo**（推荐）：稳定可靠，轻量 HTTP，无 CAPTCHA，速度最快
+- **Bing**：中文搜索效果好，轻量 HTTP，偶尔有 CAPTCHA
+- **Google**：全球最全的搜索结果，使用 Playwright JS 渲染，较慢但成功率高
 - **百度**：中文内容搜索效果好，适合国内搜索
-- **Bing**：中文搜索效果好，偶尔有 CAPTCHA
 - **Yahoo**：综合搜索，结果质量中等
-- **Google**：需要 JS 渲染，暂不支持
+
+**选择建议：**
+- 日常快速查询 → DuckDuckGo 或 Bing
+- 需要最全结果 → Google（接受较慢速度）
+- 中文内容 → Bing 或百度
 
 ### 2. 优化搜索词
 
@@ -286,6 +291,11 @@ Agent：我来帮您查询深圳的天气信息。
 3. 增加结果数量以获取更多选项
 
 ## 更新日志
+
+### v1.4.0 (2026-05-22)
+- **重大更新**：Google 搜索改用 Playwright JS 渲染，大幅提高成功率
+- 修正错误提示信息，更准确地描述 Google 搜索的问题
+- 更新文档说明各引擎的渲染方式
 
 ### v1.3.0 (2026-05-19)
 - `web_fetch` 新增 JavaScript 渲染能力，支持 Playwright/Chromium

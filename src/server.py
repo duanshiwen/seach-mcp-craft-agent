@@ -42,7 +42,8 @@ TOOLS = [
         name="search",
         description=(
             "通过指定搜索引擎查询信息，返回结构化的搜索结果。"
-            "支持 Bing、DuckDuckGo、Yahoo、百度四个搜索引擎（Google 需要 JS 渲染暂不支持）。"
+            "支持 Google、Bing、DuckDuckGo、Yahoo、百度五个搜索引擎。"
+            "注意：Google 可能被 CAPTCHA 拦截，推荐使用 DuckDuckGo 或 Bing。"
             "适合获取实时信息，如天气、新闻、最新资讯等。"
         ),
         inputSchema={
@@ -251,16 +252,18 @@ async def handle_search(arguments: dict[str, Any]) -> list[TextContent]:
         # 执行搜索
         results = await perform_search(query, engine, max_results)
 
-        # 如果 Google 返回空结果，提供提示
+        # 如果 Google 返回空结果，可能是被 CAPTCHA 拦截
         if not results and engine == "google":
             return [TextContent(
                 type="text",
                 text=(
-                    "Google 搜索需要 JavaScript 渲染，当前不支持。"
-                    "请尝试使用其他搜索引擎：\n"
-                    "- `duckduckgo`（推荐，稳定可靠）\n"
-                    "- `bing`（中文效果好）\n"
-                    "- `yahoo`（综合搜索）"
+                    "Google 搜索被拦截（CAPTCHA），可能原因：\n"
+                    "- 搜索频率过高\n"
+                    "- IP 被 Google 限制\n"
+                    "\n建议：\n"
+                    "- 使用其他搜索引擎：`duckduckgo`（推荐）、`bing`\n"
+                    "- 稍后重试\n"
+                    "- 或使用 `web_search` 内置工具作为备选"
                 ),
             )]
 
@@ -288,7 +291,7 @@ async def handle_list_engines() -> list[TextContent]:
         {
             "name": "google",
             "display_name": "Google",
-            "description": "全球最大的搜索引擎（需要 JS 渲染，暂不支持）",
+            "description": "全球最大的搜索引擎（Playwright JS 渲染，结果最全但较慢）",
         },
         {
             "name": "bing",
