@@ -7,8 +7,10 @@
 - 通过 Playwright JS 渲染绕过 CAPTCHA
 """
 
+import asyncio
 import logging
 import random
+import sys
 from urllib.parse import quote_plus, urlparse, parse_qs
 
 from src.types import SearchEngine, SearchResult
@@ -116,6 +118,8 @@ class GoogleSearchEngine(BaseSearchEngine):
         super().__init__(engine_type=SearchEngine.GOOGLE, **kwargs)
         self._playwright = None
         self._browser = None
+        self._popup_browser = None
+        self._captcha_timeout = 120  # CAPTCHA 手动验证超时（秒）
 
     async def _init_browser(self):
         """初始化 Playwright 浏览器。"""
@@ -142,7 +146,14 @@ class GoogleSearchEngine(BaseSearchEngine):
             )
 
     async def _close_browser(self):
-        """关闭 Playwright 浏览器。"""
+        """关闭 Playwright 浏览器（包括弹出浏览器）。"""
+        try:
+            if self._popup_browser and self._popup_browser.is_connected():
+                await self._popup_browser.close()
+        except Exception as e:
+            logger.warning(f"关闭弹出浏览器时出错: {e}")
+        finally:
+            self._popup_browser = None
         try:
             if self._browser and self._browser.is_connected():
                 await self._browser.close()
@@ -247,7 +258,8 @@ class GoogleSearchEngine(BaseSearchEngine):
             html = await page.content()
             if self._is_blocked(html):
                 logger.warning("Google 返回了验证页面 (CAPTCHA)")
-                return []
+                # 弹出可见浏览器窗口，让用户手动验证
+                return await self._handle_captcha_with_popup(url)
 
             # 使用 JavaScript 提取结果
             results = await page.evaluate(EXTRACT_RESULTS_JS)
@@ -288,6 +300,125 @@ class GoogleSearchEngine(BaseSearchEngine):
         
         # 如果有拦截特征且没有 #main，说明被拦截
         return has_block and not has_main
+
+    async def _handle_captcha_with_popup(self, url: str) -> list[dict]:
+        """当 CAPTCHA 被检测到时，弹出可见浏览器窗口等待用户手动验证。
+
+        关闭现有 headless 浏览器，启动一个非 headless 浏览器。
+        用户在浏览器窗口中手动完成人机验证后，自动提取搜索结果。
+
+        Args:
+            url: Google 搜索 URL
+
+        Returns:
+            验证通过后的搜索结果列表（超时则返回空列表）
+        """
+        banner = "=" * 60
+        msg = (
+            f"\n{banner}\n"
+            f"  ⚠️  Google 触发了人机验证（CAPTCHA）\n"
+            f"  🖥️  正在弹出浏览器窗口，请在窗口中完成验证……\n"
+            f"  ⏱️  最多等待 {self._captcha_timeout} 秒\n"
+            f"{banner}\n"
+        )
+        logger.warning("Google CAPTCHA — 弹出浏览器等待用户手动验证")
+        print(msg, file=sys.stderr, flush=True)
+
+        # 先关闭现有的 headless 上下文
+        try:
+            if self._browser and self._browser.is_connected():
+                await self._browser.close()
+                self._browser = None
+        except Exception as e:
+            logger.warning(f"关闭 headless 浏览器时出错: {e}")
+
+        # 确保 Playwright 仍在运行
+        try:
+            from playwright.async_api import async_playwright
+        except ImportError:
+            raise RuntimeError(
+                "Playwright 未安装。请运行：\n"
+                "pip install playwright && python -m playwright install chromium"
+            )
+        if self._playwright is None:
+            self._playwright = await async_playwright().start()
+
+        # 启动非 headless 浏览器
+        self._popup_browser = await self._playwright.chromium.launch(
+            headless=False,
+            args=[
+                "--disable-blink-features=AutomationControlled",
+                "--disable-dev-shm-usage",
+                "--no-sandbox",
+                "--disable-setuid-sandbox",
+            ],
+        )
+
+        context = await self._popup_browser.new_context(
+            user_agent=random.choice(self._get_user_agents()),
+            viewport={"width": 1366, "height": 900},
+            locale="zh-CN",
+            timezone_id="Asia/Shanghai",
+        )
+
+        page = await context.new_page()
+
+        try:
+            # 添加反检测脚本
+            await page.add_init_script("""
+                Object.defineProperty(navigator, 'webdriver', { get: () => false });
+                Object.defineProperty(navigator, 'plugins', {
+                    get: () => [1, 2, 3, 4, 5]
+                });
+                Object.defineProperty(navigator, 'languages', {
+                    get: () => ['zh-CN', 'zh', 'en']
+                });
+            """)
+
+            # 访问 Google 搜索页面（此时会显示 CAPTCHA）
+            response = await page.goto(url, wait_until="networkidle", timeout=30000)
+            if not response or response.status != 200:
+                logger.warning(
+                    f"弹出浏览器页面返回状态码: "
+                    f"{response.status if response else 'None'}"
+                )
+
+            # 等待用户手动完成验证（每 2 秒轮询一次）
+            start_time = asyncio.get_event_loop().time()
+            while True:
+                elapsed = asyncio.get_event_loop().time() - start_time
+                if elapsed > self._captcha_timeout:
+                    timeout_msg = (
+                        f"\n⏰ CAPTCHA 验证超时（{self._captcha_timeout} 秒），"
+                        f"请稍后重试或使用其他搜索引擎。\n"
+                    )
+                    logger.warning(
+                        f"CAPTCHA 验证超时（{self._captcha_timeout}秒），放弃等待"
+                    )
+                    print(timeout_msg, file=sys.stderr, flush=True)
+                    return []
+
+                await asyncio.sleep(2)
+
+                html = await page.content()
+                if not self._is_blocked(html):
+                    # CAPTCHA 已通过！
+                    passed_msg = (
+                        f"\n✅ CAPTCHA 验证通过！正在提取搜索结果……\n"
+                    )
+                    logger.info("CAPTCHA 验证通过！正在提取搜索结果...")
+                    print(passed_msg, file=sys.stderr, flush=True)
+
+                    # 等待搜索结果加载
+                    await page.wait_for_timeout(random.randint(1000, 2000))
+
+                    # 提取结果
+                    results = await page.evaluate(EXTRACT_RESULTS_JS)
+                    logger.info(f"验证通过后提取到 {len(results)} 个结果")
+                    return results
+
+        finally:
+            await context.close()
 
     def _get_user_agents(self) -> list[str]:
         """获取 User-Agent 列表。

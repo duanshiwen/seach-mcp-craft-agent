@@ -256,18 +256,19 @@ async def handle_search(arguments: dict[str, Any]) -> list[TextContent]:
         # 执行搜索
         results = await perform_search(query, engine, max_results)
 
-        # 如果 Google 返回空结果，可能是被 CAPTCHA 拦截
+        # 如果 Google 返回空结果（可能是 CAPTCHA 验证超时或用户取消了验证）
         if not results and engine == "google":
             return [TextContent(
                 type="text",
                 text=(
-                    "Google 搜索被拦截（CAPTCHA），可能原因：\n"
+                    "Google 搜索未返回结果。\n\n"
+                    "可能原因：\n"
+                    "- CAPTCHA 验证超时（已弹出浏览器窗口等待完成验证）\n"
                     "- 搜索频率过高\n"
                     "- IP 被 Google 限制\n"
                     "\n建议：\n"
-                    "- 使用其他搜索引擎：`duckduckgo`（推荐）、`bing`\n"
-                    "- 稍后重试\n"
-                    "- 或使用 `web_search` 内置工具作为备选"
+                    "- 等待几秒后重试 Google 搜索，弹出窗口后完成手动验证\n"
+                    "- 或使用其他搜索引擎：`duckduckgo`（推荐）、`bing`"
                 ),
             )]
 
