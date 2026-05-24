@@ -4,7 +4,7 @@
 
 ## ✨ 特性
 
-- 🔍 **五引擎支持**：Google（Playwright JS 渲染）、Bing、DuckDuckGo、Yahoo、百度
+- 🔍 **五引擎支持**：Google（可见浏览器 + Playwright JS 渲染）、Bing、DuckDuckGo、Yahoo、百度
 - 🌐 **网页提取**：`web_fetch` 工具获取 URL 正文，自动转为 AI 友好的 Markdown
 - 🆓 **完全免费**：无需 API 密钥，无需付费
 - 📦 **标准化输出**：返回结构化的搜索结果（标题、链接、摘要）
@@ -19,7 +19,7 @@
 | **Bing** | 轻量 HTTP | 1-3 秒 | 中文搜索效果好 |
 | **百度** | 轻量 HTTP | 1-3 秒 | 国内内容搜索 |
 | **Yahoo** | 轻量 HTTP | 1-3 秒 | 综合搜索 |
-| **Google** | Playwright JS 渲染 | 3-5 秒 | 结果最全，语义结构解析（h3+a）；触发 CAPTCHA 时自动弹出可见浏览器窗口等待手动验证 |
+| **Google** | 可见浏览器 + Playwright JS 渲染 | 3-5 秒；遇到 CAPTCHA 取决于人工验证时间 | 结果最全，语义结构解析（h3+a）；直接打开明文浏览器搜索，拿到结果后自动关闭；触发 CAPTCHA 时在同一窗口等待手动验证 |
 
 ## 🚀 快速开始
 
@@ -161,7 +161,7 @@ search-engine-mcp/
 │   └── engines/             # 搜索引擎实现
 │       ├── __init__.py
 │       ├── base.py          # 基类（BaseSearchEngine）
-│       ├── google.py        # Google 搜索（Playwright JS 渲染 + 语义结构解析）
+│       ├── google.py        # Google 搜索（可见浏览器 + Playwright JS 渲染 + 语义结构解析）
 │       ├── bing.py          # Bing 搜索（HTTP）
 │       ├── duckduckgo.py    # DuckDuckGo 搜索（HTTP）
 │       ├── yahoo.py         # Yahoo 搜索（HTTP）
@@ -198,7 +198,7 @@ search-engine-mcp/
 
 - **日常快速查询** → DuckDuckGo（推荐，稳定快速）
 - **中文搜索** → Bing 或百度
-- **需要最全结果** → Google（接受较慢速度）
+- **需要最全结果** → Google（会打开可见浏览器窗口；接受较慢速度）
 - **隐私优先** → DuckDuckGo
 
 ### 深入阅读搜索结果
@@ -214,25 +214,42 @@ search-engine-mcp/
 { "url": "https://搜索结果中的某个链接", "extract_mode": "markdown" }
 ```
 
-## 🤖 Google CAPTCHA 手动验证
+## 🤖 Google 可见浏览器搜索与 CAPTCHA 手动验证
 
-当 Google 检测到自动化请求并弹出 CAPTCHA 人机验证时，搜索引擎会自动处理：
+Google 搜索现在采用 **可见浏览器优先** 的方式，而不是先用 headless 浏览器探测：
 
-1. 🔍 **首次尝试**：使用 headless Playwright 浏览器访问 Google
-2. 🚫 **检测到 CAPTCHA**：关闭 headless 浏览器，stderr 输出提示信息
-3. 🖥️ **弹出可见窗口**：启动非 headless Chromium 浏览器，显示 Google 验证页面
-4. ✋ **等待手动完成**：每 2 秒轮询检测 CAPTCHA 状态
-5. ✅ **验证通过**：自动提取搜索结果并返回
-6. ⏰ **超时**：默认等待 120 秒，超时后返回空结果并建议换引擎
+1. 🖥️ **直接打开明文浏览器窗口**：启动一个可见的 Chrome / Chromium 持久化浏览器上下文，并访问 Google 搜索页
+2. 🔍 **自动提取结果**：页面出现搜索结果后，使用 Playwright 从页面结构中提取标题、链接、摘要
+3. ✅ **自动关闭窗口**：一旦成功提取搜索结果，自动关闭本次搜索打开的浏览器窗口并返回结果
+4. ✋ **遇到 CAPTCHA**：如果 Google 触发人机验证，用户在同一个可见浏览器窗口中手动完成验证
+5. 🔁 **持续轮询**：程序每 2 秒检查一次页面是否已经出现可提取的搜索结果
+6. ⏰ **超时返回空结果**：默认最多等待 300 秒；超时后返回空结果并建议换用 DuckDuckGo / Bing
 
-> **提示**：弹出窗口时会在终端看到明显的提示信息。完成验证后窗口会自动关闭。
+> **提示**：Google 搜索会使用 source 专用浏览器 profile，不会复用或清理用户日常 Chrome profile。拿到结果后窗口会自动关闭；如果正在 CAPTCHA 验证，请不要手动关闭窗口。
+
+### Google 相关环境变量
+
+| 环境变量 | 默认值 | 说明 |
+|----------|--------|------|
+| `GOOGLE_CAPTCHA_TIMEOUT` | `300` | Google 可见浏览器搜索 / CAPTCHA 验证最长等待秒数 |
+| `GOOGLE_PLAYWRIGHT_PROFILE_DIR` | `~/.craft-agent/browser-profiles/search-engine-mcp-google` | Google 搜索专用浏览器 profile 目录，用于保存验证状态 / cookie |
+
+### Google 诊断文件
+
+当 Google 搜索、CAPTCHA 或窗口行为异常时，可以查看以下文件：
+
+| 文件 | 说明 |
+|------|------|
+| `google_captcha_debug.log` | Google 搜索与可见浏览器流程诊断日志 |
+| `google_last_captcha_url.txt` | 最近一次触发 CAPTCHA / 验证页面的 URL |
+| `mcp_runtime_debug.log` | MCP server 层 tool 调用与搜索运行诊断日志 |
 
 ## ⚠️ 注意事项
 
 - ⏱️ **请求频率**：建议每次请求间隔 2-3 秒，避免被引擎限制
 - 📊 **结果数量**：每次最多返回 10 个结果
 - 🌐 **网络要求**：Google / Yahoo / DuckDuckGo 需要访问国际网络
-- 🤖 **CAPTCHA 处理**：Google 搜索被 CAPTCHA 拦截时，会自动弹出可见浏览器窗口（非 headless）等待用户手动完成人机验证，验证通过后自动提取搜索结果并返回。默认等待 120 秒，超时后返回空结果并提示使用其他搜索引擎
+- 🤖 **CAPTCHA 处理**：Google 搜索始终使用可见浏览器窗口；被 CAPTCHA 拦截时，用户在同一窗口手动完成人机验证，验证通过并出现搜索结果后自动提取并关闭窗口。默认等待 300 秒，超时后返回空结果并提示使用其他搜索引擎
 
 ## 📄 许可证
 
