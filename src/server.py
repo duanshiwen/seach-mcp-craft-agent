@@ -2,7 +2,10 @@
 
 import asyncio
 import logging
+import os
 import sys
+from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from mcp.server import Server
@@ -31,6 +34,17 @@ from src.utils import (
 )
 
 logger = logging.getLogger(__name__)
+RUNTIME_DEBUG_LOG = Path(__file__).resolve().parents[1] / "mcp_runtime_debug.log"
+
+
+def _runtime_debug(message: str) -> None:
+    """Write source-local runtime diagnostics without touching MCP stdout."""
+    try:
+        ts = datetime.now().isoformat(timespec="seconds")
+        with RUNTIME_DEBUG_LOG.open("a", encoding="utf-8") as f:
+            f.write(f"[{ts}] {message}\n")
+    except Exception:
+        pass
 
 # 创建 MCP 服务器实例
 server = Server("search-engine-mcp")
@@ -217,6 +231,7 @@ async def handle_call_tool(
         ValueError: 参数错误或工具不存在
     """
     logger.info(f"调用工具: {name}, 参数: {arguments}")
+    _runtime_debug(f"call_tool name={name!r} arguments={arguments!r}")
 
     if name == "search":
         return await handle_search(arguments or {})
@@ -251,10 +266,18 @@ async def handle_search(arguments: dict[str, Any]) -> list[TextContent]:
         raise ValueError(error_msg)
 
     logger.info(f"执行搜索: query='{query}', engine='{engine}', max_results={max_results}")
+    _runtime_debug(
+        "handle_search "
+        f"query={query!r} engine={engine!r} max_results={max_results!r} "
+        f"force_popup={os.getenv('SEARCH_ENGINE_MCP_GOOGLE_FORCE_POPUP')!r} "
+        f"captcha_timeout={os.getenv('GOOGLE_CAPTCHA_TIMEOUT')!r}"
+    )
 
     try:
         # 执行搜索
+        _runtime_debug(f"before perform_search engine={engine!r}")
         results = await perform_search(query, engine, max_results)
+        _runtime_debug(f"after perform_search engine={engine!r} results={len(results) if results is not None else None}")
 
         # 如果 Google 返回空结果（可能是 CAPTCHA 验证超时或用户取消了验证）
         if not results and engine == "google":
@@ -262,13 +285,16 @@ async def handle_search(arguments: dict[str, Any]) -> list[TextContent]:
                 type="text",
                 text=(
                     "Google 搜索未返回结果。\n\n"
+                    "如果没有看到 CAPTCHA 弹窗，请查看并手动打开最近一次验证 URL：\n"
+                    "/Users/yakii/.craft-agent/workspaces/shiwens-knowledge-base/sources/search-engine-mcp/google_last_captcha_url.txt\n\n"
                     "可能原因：\n"
                     "- CAPTCHA 验证超时（已弹出浏览器窗口等待完成验证）\n"
                     "- 搜索频率过高\n"
                     "- IP 被 Google 限制\n"
                     "\n建议：\n"
                     "- 等待几秒后重试 Google 搜索，弹出窗口后完成手动验证\n"
-                    "- 或使用其他搜索引擎：`duckduckgo`（推荐）、`bing`"
+                    "- 或使用其他搜索引擎：`duckduckgo`（推荐）、`bing`\n"
+                    "\n诊断日志：/Users/yakii/.craft-agent/workspaces/shiwens-knowledge-base/sources/search-engine-mcp/google_captcha_debug.log"
                 ),
             )]
 
@@ -283,6 +309,7 @@ async def handle_search(arguments: dict[str, Any]) -> list[TextContent]:
     except Exception as e:
         error_message = f"搜索失败: {str(e)}"
         logger.error(error_message)
+        _runtime_debug(f"handle_search exception type={type(e).__name__} err={e!r}")
         return [TextContent(type="text", text=error_message)]
 
 
