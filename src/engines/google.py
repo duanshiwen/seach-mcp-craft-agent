@@ -118,6 +118,14 @@ class GoogleSearchEngine(BaseSearchEngine):
 
     BASE_URL = "https://www.google.com/search"
 
+    # Google 使用 launch_persistent_context + 固定 user_data_dir 来保留 CAPTCHA
+    # cookie。Chromium/Chrome 的持久化 profile 不能被同一进程中的多个
+    # browser 实例并发独占，否则会触发 SingletonLock / database locked / 
+    # “正在现有的浏览器会话中打开”，最终表现为 Playwright TargetClosedError。
+    # 因此只串行化 Google profile 浏览器段；其他 HTTP 搜索引擎不受影响。
+    _profile_lock: asyncio.Lock | None = None
+    _profile_lock_loop: asyncio.AbstractEventLoop | None = None
+
     def __init__(self, **kwargs):
         """初始化 Google 搜索引擎。"""
         super().__init__(engine_type=SearchEngine.GOOGLE, **kwargs)
@@ -241,7 +249,27 @@ class GoogleSearchEngine(BaseSearchEngine):
         """
         await self._init_browser()
 
-        return await self._search_with_visible_browser(url)
+        lock = self._get_profile_lock()
+        self._debug_log(f"waiting google profile lock url={url}")
+        async with lock:
+            self._debug_log(f"acquired google profile lock url={url}")
+            try:
+                return await self._search_with_visible_browser(url)
+            finally:
+                self._debug_log(f"releasing google profile lock url={url}")
+
+    @classmethod
+    def _get_profile_lock(cls) -> asyncio.Lock:
+        """获取当前事件循环上的 Google profile 串行锁。
+
+        asyncio.Lock 绑定事件循环；测试或嵌入式运行时可能创建新的 loop。
+        因此按当前 running loop 懒加载，避免跨 loop 复用锁。
+        """
+        loop = asyncio.get_running_loop()
+        if cls._profile_lock is None or cls._profile_lock_loop is not loop:
+            cls._profile_lock = asyncio.Lock()
+            cls._profile_lock_loop = loop
+        return cls._profile_lock
 
     async def _search_with_visible_browser(self, url: str) -> list[dict]:
         """直接打开可见浏览器搜索，拿到结果后自动关闭。"""
