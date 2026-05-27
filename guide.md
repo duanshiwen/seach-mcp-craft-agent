@@ -1,13 +1,13 @@
 # 搜索引擎 MCP
 
-免费的多搜索引擎 API 工具，支持 Google、Bing、DuckDuckGo、Yahoo、百度五个搜索引擎。Google 使用 Playwright JS 渲染 + 语义结构解析（基于 h3 标题 + a 链接，不依赖 CSS 类名），其他引擎使用轻量 HTTP 请求。
+免费的多搜索引擎 API 工具，支持 Google、Bing、DuckDuckGo、Yahoo、百度五个搜索引擎。Google、Bing、百度使用 Playwright 可见浏览器窗口搜索（支持 CAPTCHA 自动检测与手动验证），DuckDuckGo 和 Yahoo 使用轻量 HTTP 请求。
 
 ## 功能特性
 
 - **多引擎支持**：可在五个搜索引擎之间切换
 - **结构化输出**：返回标题、链接、摘要的标准格式
 - **完全免费**：无需 API 密钥或付费订阅
-- **智能渲染**：Google 使用 Playwright JS 渲染，其他引擎使用 HTTP 请求
+- **智能渲染**：Google/Bing/百度使用可见浏览器窗口，自动处理 CAPTCHA；DuckDuckGo/Yahoo 使用轻量 HTTP
 
 ## 使用方法
 
@@ -28,10 +28,10 @@
 - `query`（必填）：搜索查询关键词
 - `engine`（可选）：搜索引擎选择，默认 `duckduckgo`
   - `duckduckgo` - DuckDuckGo 搜索（推荐，稳定可靠，轻量 HTTP）
-  - `bing` - Bing 搜索（中文效果好，轻量 HTTP）
-  - `google` - Google 搜索（Playwright JS 渲染，结果最全但较慢）
+  - `bing` - Bing 搜索（中文效果好，浏览器模式 + HTTP fallback）
+  - `google` - Google 搜索（浏览器模式，结果最全但较慢）
   - `yahoo` - Yahoo 搜索（轻量 HTTP）
-  - `baidu` - 百度搜索（中文内容搜索，轻量 HTTP）
+  - `baidu` - 百度搜索（中文内容搜索，浏览器模式 + HTTP fallback）
 - `max_results`（可选）：返回结果数量，默认 5，最大 10
 
 ### 列出搜索引擎
@@ -176,15 +176,15 @@
 ### 1. 选择合适的搜索引擎
 
 - **DuckDuckGo**（推荐）：稳定可靠，轻量 HTTP，无 CAPTCHA，速度最快
-- **Bing**：中文搜索效果好，轻量 HTTP，偶尔有 CAPTCHA
-- **Google**：全球最全的搜索结果，使用 Playwright JS 渲染，较慢但成功率高。触发 CAPTCHA 时会自动弹出可见浏览器窗口等待手动验证。
-- **百度**：中文内容搜索效果好，适合国内搜索
-- **Yahoo**：综合搜索，结果质量中等
+- **Bing**：中文搜索效果好，浏览器模式 + HTTP fallback。触发 CAPTCHA 时会自动弹出可见浏览器窗口等待手动验证。
+- **Google**：全球最全的搜索结果，浏览器模式。触发 CAPTCHA 时会自动弹出可见浏览器窗口等待手动验证。
+- **百度**：中文内容搜索效果好，浏览器模式 + HTTP fallback。触发安全验证时会自动弹出可见浏览器窗口等待手动验证。
+- **Yahoo**：综合搜索，结果质量中等，轻量 HTTP
 
 **选择建议：**
-- 日常快速查询 → DuckDuckGo 或 Bing
-- 需要最全结果 → Google（接受较慢速度）
-- 中文内容 → Bing 或百度
+- 日常快速查询 → DuckDuckGo 或 Yahoo（轻量 HTTP，无需浏览器）
+- 需要最全结果 → Google（浏览器模式）
+- 中文内容 → Bing 或百度（浏览器模式）
 
 ### 2. 优化搜索词
 
@@ -213,11 +213,12 @@
    - 尝试其他搜索引擎
    - 减少结果数量
 
-2. **Google CAPTCHA 拦截**
+2. **CAPTCHA 拦截（Google/Bing/百度）**
    - 系统会自动弹出可见浏览器窗口等待手动验证
    - 在窗口中完成人机验证（点击"我不是机器人"等）
    - 验证通过后自动提取结果
-   - 超时（120秒）无响应则建议换 Bing/DuckDuckGo
+   - 超时（默认300秒）无响应则建议换 DuckDuckGo/Yahoo
+   - 注意：同一时间只能有一个浏览器窗口（全局队列锁）
 
 3. **结果不准确**
    - 优化搜索关键词
@@ -233,16 +234,21 @@
 - **传输协议**：stdio（标准输入输出）
 - **认证方式**：无认证（公开服务）
 - **请求方式**：
-  - DuckDuckGo/Bing/Yahoo/百度：HTTP 请求（httpx + selectolax）
-  - Google：Playwright JS 渲染 + 语义结构解析
-- **Google 解析策略**：基于 #main 容器 + h3 标题 + a 链接的语义结构，不依赖特定 CSS 类名（如 div.g, div.tF2Cxc 等）
-  - `#main`：稳定的主容器（ID 属性，非 class），所有搜索结果都在此容器内
-  - `h3`：Google 搜索结果标题始终使用 h3 标签
-  - `a`：标题被包裹在 a 链接标签中
-  - 自动提取真实 URL（处理 Google 重定向）
+  - DuckDuckGo/Yahoo：轻量 HTTP 请求（httpx + selectolax）
+  - Google/Bing/百度：Playwright 可见浏览器窗口 + JavaScript 提取
+- **浏览器模式**：
+  - 全局队列锁：同一时间只允许一个引擎弹出浏览器窗口
+  - CAPTCHA 自动检测：识别验证码页面，弹出窗口等待用户手动验证
+  - HTTP fallback：Bing/百度在浏览器模式失败时回退到轻量 HTTP
+- **解析策略**：
+  - Google：基于 #main 容器 + h3 标题 + a 链接的语义结构
+  - Bing：基于 #b_results 容器下的 .b_algo 元素
+  - 百度：基于 .c-result/.result/.c-container 容器
+- **环境变量**：
+  - `SEARCH_ENGINE_MCP_CAPTCHA_TIMEOUT`：CAPTCHA 等待超时时间（秒），默认 300
 - **响应时间**：
-  - HTTP 引擎：1-3 秒
-  - Google（JS 渲染）：3-5 秒
+  - HTTP 引擎（DuckDuckGo/Yahoo）：1-3 秒
+  - 浏览器引擎（Google/Bing/百度）：3-10 秒（取决于页面加载速度）
 
 ## 集成示例
 
@@ -306,6 +312,20 @@ Agent：我来帮您查询深圳的天气信息。
 3. 增加结果数量以获取更多选项
 
 ## 更新日志
+
+### v1.5.0 (2026-05-27)
+- **重大更新**：Bing 和百度搜索改用 Playwright 可见浏览器窗口模式
+- **架构重构**：
+  - 提取 `BrowserSearchEngine` 基类，统一浏览器生命周期管理
+  - Google/Bing/百度共享浏览器队列锁，同一时间只允许一个弹出窗口
+  - Bing/百度保留 HTTP 模式作为 fallback
+- **CAPTCHA 处理**：
+  - 统一 CAPTCHA 超时配置（环境变量 `SEARCH_ENGINE_MCP_CAPTCHA_TIMEOUT`，默认 300 秒）
+  - 所有浏览器引擎共享 CAPTCHA 检测与弹窗等待逻辑
+- **更新文档**：
+  - 更新各引擎说明：浏览器模式 vs 轻量 HTTP
+  - 更新 CAPTCHA 处理说明
+  - 更新技术细节和响应时间
 
 ### v1.4.0 (2026-05-22)
 - **重大更新**：Google 搜索改用 Playwright JS 渲染，成功绕过 CAPTCHA
