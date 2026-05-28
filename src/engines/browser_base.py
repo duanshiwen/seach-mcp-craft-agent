@@ -412,13 +412,13 @@ class BrowserSearchEngine(BaseSearchEngine):
             return int(sock.getsockname()[1])
 
     def _browser_args(self) -> list[str]:
-        """获取 Chromium 启动参数。"""
+        """获取 Chromium 启动参数。
+
+        注意：不使用 --no-sandbox / --disable-setuid-sandbox / --disable-blink-features
+        等会触发 Chrome 橙色警告条的参数。反检测由 add_init_script 覆盖。
+        """
         return [
-            "--disable-blink-features=AutomationControlled",
             "--disable-dev-shm-usage",
-            "--no-sandbox",
-            "--disable-setuid-sandbox",
-            "--start-maximized",
         ]
 
     def _get_user_agents(self) -> list[str]:

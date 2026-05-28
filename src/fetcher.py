@@ -239,9 +239,7 @@ async def _fetch_html_js(
             browser = await p.chromium.launch(
                 headless=True,
                 args=[
-                    "--disable-blink-features=AutomationControlled",
                     "--disable-dev-shm-usage",
-                    "--no-sandbox",
                 ],
             )
             try:
