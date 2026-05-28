@@ -262,6 +262,8 @@ class BrowserSearchEngine(BaseSearchEngine):
                     "--window-position=80,80",
                     "--window-size=1366,900",
                 ],
+                # 移除 Playwright 默认添加的 --no-sandbox，避免 Chrome 弹警告条
+                "ignore_default_args": ["--no-sandbox"],
             }
 
             # 尝试使用系统 Chrome，失败则回退到 Playwright Chromium
