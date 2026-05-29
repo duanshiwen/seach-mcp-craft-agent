@@ -64,7 +64,7 @@
   - `js` - 强制 Playwright/Chromium 渲染，适合 SPA 或需要 JavaScript 的页面
 - `wait_until`（可选）：JS 渲染等待策略，默认 `networkidle`
   - 可选：`load`、`domcontentloaded`、`networkidle`、`commit`
-- `timeout_ms`（可选）：请求或渲染超时时间，默认 `30000`，范围 3000-120000 毫秒
+- `timeout_ms`（可选）：请求或渲染超时时间，默认 `720000`（12分钟），范围 3000-720000 毫秒
 
 **特性：**
 - 🧹 自动去除广告、导航栏、页脚等干扰内容
