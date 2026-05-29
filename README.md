@@ -130,7 +130,7 @@ search-engine-mcp
 | `extract_mode` | string | ❌ | `markdown` | 输出格式：`markdown`（保留格式）/ `text`（纯文本） |
 | `render_mode` | string | ❌ | `auto` | 渲染模式：`auto`（自动检测）/ `http`（轻量）/ `js`（Playwright 渲染） |
 | `wait_until` | string | ❌ | `networkidle` | JS 渲染等待策略：`load` / `domcontentloaded` / `networkidle` / `commit` |
-| `timeout_ms` | integer | ❌ | `30000` | 超时时间（3000-120000 毫秒） |
+| `timeout_ms` | integer | ❌ | `720000` | 超时时间（3000-720000 毫秒，默认12分钟） |
 
 **特性：**
 - 🧹 自动去除广告、导航栏、页脚等干扰内容

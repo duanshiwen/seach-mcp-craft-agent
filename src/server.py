@@ -140,9 +140,9 @@ TOOLS = [
                 "timeout_ms": {
                     "type": "integer",
                     "minimum": 3000,
-                    "maximum": 120000,
-                    "default": 30000,
-                    "description": "请求或 JS 渲染超时时间（毫秒），默认 30000",
+                    "maximum": 720000,
+                    "default": 720000,
+                    "description": "请求或 JS 渲染超时时间（毫秒），默认 720000（12分钟）",
                 },
             },
             "required": ["url"],
@@ -372,7 +372,7 @@ async def handle_web_fetch(arguments: dict[str, Any]) -> list[TextContent]:
     extract_mode = arguments.get("extract_mode", "markdown")
     render_mode = arguments.get("render_mode", "auto")
     wait_until = arguments.get("wait_until", "networkidle")
-    timeout_ms = arguments.get("timeout_ms", 30000)
+    timeout_ms = arguments.get("timeout_ms", 720000)
 
     if not url:
         raise ValueError("URL 参数不能为空")

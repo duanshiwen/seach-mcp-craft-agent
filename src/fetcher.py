@@ -22,8 +22,8 @@ DEFAULT_HEADERS = {
 }
 
 # 默认超时设置（毫秒 / 秒）
-DEFAULT_TIMEOUT_MS = 30_000
-FETCH_TIMEOUT = 30
+DEFAULT_TIMEOUT_MS = 720_000
+FETCH_TIMEOUT = 720
 
 # 最大内容长度（字符）
 MAX_CONTENT_LENGTH = 100_000
@@ -333,7 +333,7 @@ async def fetch_url(
         )
 
     # 限制超时范围，避免长时间挂起
-    timeout_ms = max(3_000, min(int(timeout_ms), 120_000))
+    timeout_ms = max(3_000, min(int(timeout_ms), 720_000))
     url = url.strip()
 
     logger.info(
