@@ -1,14 +1,14 @@
 [project]
 name = "search-engine-mcp"
 version = "1.0.0"
-description = "免费的多搜索引擎 MCP 服务器，支持 Google、Bing、Yahoo、DuckDuckGo"
+description = "免费的多搜索引擎 MCP 服务器，支持 Google、Bing、Yahoo、DuckDuckGo、百度"
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.10"
 authors = [
     { name = "诗闻" }
 ]
-keywords = ["mcp", "search", "engine", "google", "bing", "yahoo", "duckduckgo"]
+keywords = ["mcp", "search", "engine", "google", "bing", "yahoo", "duckduckgo", "baidu"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
