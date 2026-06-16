@@ -9,15 +9,15 @@
   "tagline": "免费多搜索引擎工具，支持 Google（JS渲染）、Bing、DuckDuckGo、Yahoo、百度",
   "mcp": {
     "transport": "stdio",
-    "command": "/Users/yakii/.craft-agent/workspaces/shiwens-knowledge-base/sources/search-engine-mcp/.venv/bin/python",
+    "command": "/Users/duanshiwen/.craft-agent/workspaces/shiwens-knowledge-base/sources/search-engine-mcp/venv_new/bin/python",
     "args": [
       "-m",
       "src.server"
     ],
-    "cwd": "/Users/yakii/.craft-agent/workspaces/shiwens-knowledge-base/sources/search-engine-mcp",
+    "cwd": "/Users/duanshiwen/.craft-agent/workspaces/shiwens-knowledge-base/sources/search-engine-mcp",
     "authType": "none"
   },
-  "lastTestedAt": 1779590822059,
+  "lastTestedAt": 1781609564644,
   "connectionStatus": "connected",
-  "updatedAt": 1779590822059
+  "updatedAt": 1781609564644
 }

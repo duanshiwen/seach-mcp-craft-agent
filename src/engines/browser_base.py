@@ -91,7 +91,9 @@ class BrowserSearchEngine(BaseSearchEngine):
                 Path.home() / ".craft-agent" / "browser-profiles" / f"search-engine-mcp-{self.PROFILE_DIR_NAME}",
             )
         )
-        self._debug_log_path = Path(__file__).resolve().parents[2] / f"{self.PROFILE_DIR_NAME}_captcha_debug.log"
+        self._source_root = Path(__file__).resolve().parents[2]
+        self._debug_log_path = self._source_root / f"{self.PROFILE_DIR_NAME}_captcha_debug.log"
+        self._last_captcha_url_path = self._source_root / f"{self.PROFILE_DIR_NAME}_last_captcha_url.txt"
 
     # ── 抽象方法 ──────────────────────────────────────────────────────────────
 
@@ -149,7 +151,7 @@ class BrowserSearchEngine(BaseSearchEngine):
         """关闭 Playwright 实例和所有相关资源。"""
         try:
             if self._popup_context:
-                await self._popup_context.close()
+                await asyncio.wait_for(self._popup_context.close(), timeout=5)
         except Exception as e:
             logger.warning(f"关闭弹出浏览器上下文时出错: {e}")
         finally:
@@ -157,7 +159,7 @@ class BrowserSearchEngine(BaseSearchEngine):
 
         try:
             if self._popup_browser and hasattr(self._popup_browser, "is_connected") and self._popup_browser.is_connected():
-                await self._popup_browser.close()
+                await asyncio.wait_for(self._popup_browser.close(), timeout=5)
         except Exception as e:
             logger.warning(f"关闭弹出浏览器时出错: {e}")
         finally:
@@ -173,7 +175,7 @@ class BrowserSearchEngine(BaseSearchEngine):
 
         try:
             if self._playwright:
-                await self._playwright.stop()
+                await asyncio.wait_for(self._playwright.stop(), timeout=5)
         except Exception as e:
             logger.warning(f"关闭 Playwright 时出错: {e}")
         finally:
@@ -310,7 +312,12 @@ class BrowserSearchEngine(BaseSearchEngine):
                     html = await page.content()
                     current_url = page.url
                 except Exception as e:
+                    err_text = str(e)
                     self._debug_log(f"visible page unreadable err={e!r}")
+                    if "Target page, context or browser has been closed" in err_text:
+                        return []
+                    if "page is navigating" in err_text or "Unable to retrieve content" in err_text:
+                        continue
                     return []
 
                 # 检测 CAPTCHA
@@ -318,6 +325,7 @@ class BrowserSearchEngine(BaseSearchEngine):
                 if blocked and not notified:
                     notified = True
                     self._debug_log(f"visible search captcha detected url={current_url}")
+                    self._write_last_captcha_url(current_url)
                     print(
                         f"\n⚠️ {self.ENGINE_NAME} 触发 CAPTCHA。请在已打开的可见浏览器窗口中完成验证。\n",
                         file=sys.stderr,
@@ -340,7 +348,7 @@ class BrowserSearchEngine(BaseSearchEngine):
         finally:
             if context is not None:
                 try:
-                    await context.close()
+                    await asyncio.wait_for(context.close(), timeout=5)
                 except Exception as e:
                     logger.debug(f"关闭可见 {self.ENGINE_NAME} 浏览器失败: {e}")
             self._terminate_existing_profile_chrome()
@@ -431,6 +439,13 @@ class BrowserSearchEngine(BaseSearchEngine):
             "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15",
         ]
+
+    def _write_last_captcha_url(self, url: str) -> None:
+        """Persist the latest CAPTCHA URL for manual recovery/debugging."""
+        try:
+            self._last_captcha_url_path.write_text(url + "\n", encoding="utf-8")
+        except Exception as e:
+            self._debug_log(f"write last captcha url failed path={self._last_captcha_url_path} err={e!r}")
 
     def _debug_log(self, message: str) -> None:
         """写入调试日志。"""

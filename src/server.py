@@ -24,7 +24,11 @@ from src.engines import (
     GoogleSearchEngine,
     YahooSearchEngine,
 )
-from src.fetcher import fetch_url
+from src.fetcher import (
+    _fetch_apple_doc_json,
+    _render_apple_doc_markdown,
+    fetch_url,
+)
 from src.types import SearchEngine, SearchResult
 from src.utils import (
     format_results_for_display,
@@ -34,7 +38,10 @@ from src.utils import (
 )
 
 logger = logging.getLogger(__name__)
-RUNTIME_DEBUG_LOG = Path(__file__).resolve().parents[1] / "mcp_runtime_debug.log"
+SOURCE_ROOT = Path(__file__).resolve().parents[1]
+RUNTIME_DEBUG_LOG = SOURCE_ROOT / "mcp_runtime_debug.log"
+GOOGLE_LAST_CAPTCHA_URL_PATH = SOURCE_ROOT / "google_last_captcha_url.txt"
+GOOGLE_CAPTCHA_DEBUG_LOG_PATH = SOURCE_ROOT / "google_captcha_debug.log"
 
 
 def _runtime_debug(message: str) -> None:
@@ -238,7 +245,23 @@ async def handle_call_tool(
     elif name == "list_engines":
         return await handle_list_engines()
     elif name == "web_fetch":
-        return await handle_web_fetch(arguments or {})
+        args = arguments or {}
+        url = str(args.get("url", "")).strip()
+        extract_mode = args.get("extract_mode", "markdown")
+        timeout_ms = int(args.get("timeout_ms", 720000))
+        # Earliest possible fast path for Apple Developer Documentation/HIG.
+        # Some stale/cancelled long web_fetch calls can delay normal dispatch;
+        # this returns directly after the call_tool log line.
+        apple_payload = await _fetch_apple_doc_json(url, timeout_ms) if url else None
+        if apple_payload is not None:
+            data, json_url = apple_payload
+            content = _render_apple_doc_markdown(data, json_url, extract_mode)
+            if content:
+                _runtime_debug(
+                    f"apple dispatch_fast_path url={url!r} json_url={json_url!r} len={len(content)}"
+                )
+                return [TextContent(type="text", text=content)]
+        return await handle_web_fetch(args)
     else:
         raise ValueError(f"未知的工具: {name}")
 
@@ -270,7 +293,7 @@ async def handle_search(arguments: dict[str, Any]) -> list[TextContent]:
         "handle_search "
         f"query={query!r} engine={engine!r} max_results={max_results!r} "
         f"force_popup={os.getenv('SEARCH_ENGINE_MCP_GOOGLE_FORCE_POPUP')!r} "
-        f"captcha_timeout={os.getenv('GOOGLE_CAPTCHA_TIMEOUT')!r}"
+        f"captcha_timeout={os.getenv('SEARCH_ENGINE_MCP_CAPTCHA_TIMEOUT')!r}"
     )
 
     try:
@@ -286,7 +309,7 @@ async def handle_search(arguments: dict[str, Any]) -> list[TextContent]:
                 text=(
                     "Google 搜索未返回结果。\n\n"
                     "如果没有看到 CAPTCHA 弹窗，请查看并手动打开最近一次验证 URL：\n"
-                    "/Users/yakii/.craft-agent/workspaces/shiwens-knowledge-base/sources/search-engine-mcp/google_last_captcha_url.txt\n\n"
+                    f"{GOOGLE_LAST_CAPTCHA_URL_PATH}\n\n"
                     "可能原因：\n"
                     "- CAPTCHA 验证超时（已弹出浏览器窗口等待完成验证）\n"
                     "- 搜索频率过高\n"
@@ -294,7 +317,7 @@ async def handle_search(arguments: dict[str, Any]) -> list[TextContent]:
                     "\n建议：\n"
                     "- 等待几秒后重试 Google 搜索，弹出窗口后完成手动验证\n"
                     "- 或使用其他搜索引擎：`duckduckgo`（推荐）、`bing`\n"
-                    "\n诊断日志：/Users/yakii/.craft-agent/workspaces/shiwens-knowledge-base/sources/search-engine-mcp/google_captcha_debug.log"
+                    f"\n诊断日志：{GOOGLE_CAPTCHA_DEBUG_LOG_PATH}"
                 ),
             )]
 
@@ -392,16 +415,36 @@ async def handle_web_fetch(arguments: dict[str, Any]) -> list[TextContent]:
         f"获取网页内容: url='{url}', mode='{extract_mode}', "
         f"render='{render_mode}', wait_until='{wait_until}', timeout_ms={timeout_ms}"
     )
+    _runtime_debug(
+        "handle_web_fetch "
+        f"url={url!r} extract_mode={extract_mode!r} render_mode={render_mode!r} "
+        f"wait_until={wait_until!r} timeout_ms={timeout_ms!r}"
+    )
 
     try:
+        # Fast path for Apple Developer Documentation / HIG. This keeps the MCP
+        # tool responsive even when the generic HTTP→trafilatura→JS fallback path
+        # or client-side JS rendering is fragile for Apple documentation shells.
+        apple_payload = await _fetch_apple_doc_json(url, int(timeout_ms))
+        if apple_payload is not None:
+            data, json_url = apple_payload
+            content = _render_apple_doc_markdown(data, json_url, extract_mode)
+            if content:
+                _runtime_debug(f"apple fast_path url={url!r} json_url={json_url!r} len={len(content)}")
+                return [TextContent(type="text", text=content)]
+
+        _runtime_debug(f"before fetch_url url={url!r}")
         content = await fetch_url(url, extract_mode, render_mode, wait_until, timeout_ms)
+        _runtime_debug(f"after fetch_url url={url!r} len={len(content)}")
         logger.info(f"网页内容获取成功，长度: {len(content)} 字符")
         return [TextContent(type="text", text=content)]
     except ValueError as e:
+        _runtime_debug(f"handle_web_fetch value_error type={type(e).__name__} err={e!r}")
         raise e
     except Exception as e:
         error_message = f"获取网页内容失败: {str(e)}"
         logger.error(error_message)
+        _runtime_debug(f"handle_web_fetch exception type={type(e).__name__} err={e!r}")
         return [TextContent(type="text", text=error_message)]
 
 

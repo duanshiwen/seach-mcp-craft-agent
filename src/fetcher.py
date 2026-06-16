@@ -2,6 +2,7 @@
 
 import logging
 import re
+from typing import Any
 from urllib.parse import urlparse
 
 import httpx
@@ -248,10 +249,27 @@ async def _fetch_html_js(
                     locale="zh-CN",
                     viewport={"width": 1366, "height": 900},
                 )
-                await page.goto(url, wait_until=wait_until, timeout=timeout_ms)
+                try:
+                    await page.goto(url, wait_until=wait_until, timeout=timeout_ms)
+                except Exception:
+                    # Some pages (notably Apple Developer Documentation) keep analytics
+                    # or streaming requests open, so networkidle can time out even after
+                    # the document and app data are ready.
+                    if wait_until != "domcontentloaded":
+                        logger.info(
+                            "JS render failed with wait_until=%s; retrying domcontentloaded",
+                            wait_until,
+                        )
+                        await page.goto(
+                            url,
+                            wait_until="domcontentloaded",
+                            timeout=timeout_ms,
+                        )
+                    else:
+                        raise
 
                 # 给客户端框架额外一点时间完成 hydration / 数据请求
-                await page.wait_for_timeout(1500)
+                await page.wait_for_timeout(3000)
 
                 html = await page.content()
                 final_url = page.url
@@ -260,6 +278,253 @@ async def _fetch_html_js(
                 await browser.close()
     except Exception as e:
         raise RuntimeError(f"JS 渲染失败: {str(e)}")
+
+
+def _apple_doc_json_url(page_url: str) -> str | None:
+    """Map Apple Developer Documentation/HIG page URLs to their source JSON URL.
+
+    Apple's documentation shell often ships little useful body text in the
+    initial HTML. The authoritative page content is loaded from
+    /tutorials/data/<path>.json by Apple's own frontend. Fetching this JSON is
+    still an Apple-origin source and avoids depending on Playwright rendering.
+    """
+    parsed = urlparse(page_url)
+    if parsed.netloc.lower() != "developer.apple.com":
+        return None
+
+    path = parsed.path.strip("/")
+    if not path:
+        return None
+
+    # Known Apple Documentation shell paths that are backed by tutorials/data.
+    supported_prefixes = (
+        "design/human-interface-guidelines",
+        "documentation/",
+        "tutorials/",
+    )
+    if not path.startswith(supported_prefixes):
+        return None
+
+    if path.endswith(".json"):
+        return page_url
+
+    return f"{parsed.scheme}://{parsed.netloc}/tutorials/data/{path}.json"
+
+
+async def _fetch_apple_doc_json(page_url: str, timeout_ms: int) -> tuple[dict[str, Any], str] | None:
+    """Fetch Apple documentation source JSON if this URL has one."""
+    json_url = _apple_doc_json_url(page_url)
+    if not json_url:
+        return None
+
+    try:
+        async with httpx.AsyncClient(
+            headers=DEFAULT_HEADERS,
+            follow_redirects=True,
+            timeout=timeout_ms / 1000,
+            verify=False,
+        ) as client:
+            response = await client.get(json_url)
+            if response.status_code == 404:
+                return None
+            response.raise_for_status()
+            return response.json(), str(response.url)
+    except Exception as e:
+        logger.info("Apple documentation JSON fallback unavailable for %s: %s", page_url, e)
+        return None
+
+
+def _apple_ref_label(identifier: str, references: dict[str, Any]) -> tuple[str, str | None]:
+    ref = references.get(identifier, {}) if isinstance(references, dict) else {}
+    title = ref.get("title") or ref.get("name") or identifier.rsplit("/", 1)[-1]
+    url = ref.get("url")
+    if url and url.startswith("/"):
+        url = "https://developer.apple.com" + url
+    elif identifier.startswith("http"):
+        url = identifier
+    elif isinstance(url, str) and url:
+        url = "https://developer.apple.com/" + url.lstrip("/")
+    return str(title), url
+
+
+def _apple_asset_url(identifier: str, references: dict[str, Any]) -> str | None:
+    ref = references.get(identifier, {}) if isinstance(references, dict) else {}
+    variants = ref.get("variants") if isinstance(ref, dict) else None
+    if isinstance(variants, list) and variants:
+        url = variants[0].get("url")
+        if isinstance(url, str):
+            return url
+    return None
+
+
+def _render_apple_inline(items: list[dict[str, Any]] | None, references: dict[str, Any]) -> str:
+    if not items:
+        return ""
+
+    parts: list[str] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        typ = item.get("type")
+        if typ == "text":
+            parts.append(str(item.get("text", "")))
+        elif typ == "strong":
+            parts.append("**" + _render_apple_inline(item.get("inlineContent"), references).strip() + "**")
+        elif typ == "emphasis":
+            parts.append("*" + _render_apple_inline(item.get("inlineContent"), references).strip() + "*")
+        elif typ == "codeVoice":
+            parts.append("`" + str(item.get("code", "")) + "`")
+        elif typ == "reference":
+            label = item.get("overridingTitle")
+            if not label:
+                label = _render_apple_inline(item.get("overridingTitleInlineContent"), references).strip()
+            title, url = _apple_ref_label(str(item.get("identifier", "")), references)
+            label = label or title
+            parts.append(f"[{label}]({url})" if url else str(label))
+        elif typ in ("image", "video"):
+            ident = str(item.get("identifier", ""))
+            ref = references.get(ident, {}) if isinstance(references, dict) else {}
+            alt = ref.get("alt") or ident
+            asset_url = _apple_asset_url(ident, references)
+            # Avoid inline image Markdown in MCP text responses. Large image alt text
+            # and renderer-side previews can make Apple documentation responses slow
+            # or fragile; keep the Apple-origin asset URL as a normal link instead.
+            if asset_url:
+                parts.append(f"[Image: {alt}]({asset_url})")
+            elif ident:
+                parts.append(f"[{alt}]")
+        else:
+            text = item.get("text") or item.get("code")
+            if text:
+                parts.append(str(text))
+            elif item.get("inlineContent"):
+                parts.append(_render_apple_inline(item.get("inlineContent"), references))
+    return "".join(parts)
+
+
+def _render_apple_blocks(blocks: list[dict[str, Any]] | None, references: dict[str, Any]) -> list[str]:
+    rendered: list[str] = []
+    if not blocks:
+        return rendered
+
+    for block in blocks:
+        if not isinstance(block, dict):
+            continue
+        typ = block.get("type")
+
+        if typ == "paragraph":
+            text = _render_apple_inline(block.get("inlineContent"), references).strip()
+            if text:
+                rendered.append(text)
+        elif typ == "heading":
+            level = int(block.get("level") or 2)
+            level = max(2, min(level, 6))
+            text = str(block.get("text", "")).strip()
+            if text:
+                rendered.append("#" * level + " " + text)
+        elif typ in ("unorderedList", "orderedList"):
+            lines: list[str] = []
+            for idx, item in enumerate(block.get("items") or [], start=1):
+                item_blocks = _render_apple_blocks(item.get("content") or [], references)
+                item_text = " ".join(x.replace("\n", " ") for x in item_blocks).strip()
+                if item_text:
+                    prefix = f"{idx}." if typ == "orderedList" else "-"
+                    lines.append(f"{prefix} {item_text}")
+            if lines:
+                rendered.append("\n".join(lines))
+        elif typ == "aside":
+            name = block.get("name") or block.get("style") or "Note"
+            body = _render_apple_blocks(block.get("content") or [], references)
+            if body:
+                rendered.append(f"> **{name}:** " + "\n> ".join("\n\n".join(body).splitlines()))
+        elif typ == "row":
+            cols: list[str] = []
+            for col in block.get("columns") or []:
+                cols.extend(_render_apple_blocks(col.get("content") or [], references))
+            if cols:
+                rendered.append("\n\n".join(cols))
+        elif typ == "table":
+            rows = block.get("rows") or []
+            md_rows: list[list[str]] = []
+            for row in rows:
+                cells: list[str] = []
+                for cell in row:
+                    cell_blocks: list[dict[str, Any]] = []
+                    if isinstance(cell, list):
+                        for part in cell:
+                            if isinstance(part, dict):
+                                cell_blocks.append(part)
+                    elif isinstance(cell, dict):
+                        cell_blocks.append(cell)
+                    cell_text = " ".join(_render_apple_blocks(cell_blocks, references)).replace("|", "\\|").strip()
+                    cells.append(cell_text)
+                if cells:
+                    md_rows.append(cells)
+            if md_rows:
+                width = max(len(r) for r in md_rows)
+                md_rows = [r + [""] * (width - len(r)) for r in md_rows]
+                header = md_rows[0]
+                table_lines = ["| " + " | ".join(header) + " |", "| " + " | ".join(["---"] * width) + " |"]
+                for row in md_rows[1:]:
+                    table_lines.append("| " + " | ".join(row) + " |")
+                rendered.append("\n".join(table_lines))
+        elif typ == "links":
+            lines: list[str] = []
+            for ident in block.get("items") or []:
+                title, url = _apple_ref_label(str(ident), references)
+                lines.append(f"- [{title}]({url})" if url else f"- {title}")
+            if lines:
+                rendered.append("\n".join(lines))
+        else:
+            nested = block.get("content")
+            if isinstance(nested, list):
+                rendered.extend(_render_apple_blocks(nested, references))
+            elif block.get("inlineContent"):
+                text = _render_apple_inline(block.get("inlineContent"), references).strip()
+                if text:
+                    rendered.append(text)
+
+    return rendered
+
+
+def _render_apple_doc_markdown(data: dict[str, Any], source_url: str, extract_mode: str) -> str | None:
+    metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
+    references = data.get("references") if isinstance(data.get("references"), dict) else {}
+    title = metadata.get("title") or data.get("title")
+    abstract = _render_apple_inline(data.get("abstract"), references).strip()
+
+    sections: list[str] = []
+    if title:
+        sections.append(f"# {title}")
+    if abstract:
+        sections.append(abstract)
+
+    for section in data.get("primaryContentSections") or []:
+        if not isinstance(section, dict):
+            continue
+        blocks = _render_apple_blocks(section.get("content") or [], references)
+        sections.extend(blocks)
+
+    notices = data.get("legalNotices") if isinstance(data.get("legalNotices"), dict) else {}
+    copyright_text = notices.get("copyright")
+    if isinstance(copyright_text, str) and copyright_text:
+        copyright_text = re.sub(r"<[^>]+>", "", copyright_text)
+        sections.append(copyright_text)
+
+    markdown = "\n\n".join(x.strip() for x in sections if x and x.strip())
+    if not markdown.strip():
+        return None
+    # Keep Apple documentation responses conservative for MCP transport/UI.
+    # The source remains Apple's own JSON; the text is flattened to avoid rich
+    # Markdown edge cases in clients while still giving immediately usable body text.
+    rendered = re.sub(r"!\[([^\]]*)\]\([^)]*\)", r"\1", markdown)
+    rendered = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", rendered)
+    rendered = rendered.replace("**", "").replace("*", "").replace("`", "")
+    rendered = _postprocess_content(rendered)
+    apple_limit = 2_000
+    if len(rendered) > apple_limit:
+        rendered = rendered[:apple_limit] + "\n\n---\n\n[Truncated: Apple document is longer. Source above is the original Apple JSON URL.]"
+    return _add_metadata(rendered, source_url, None, "apple-json")
 
 
 def _dedupe_markdown_blocks(text: str) -> str:
@@ -340,6 +605,17 @@ async def fetch_url(
         f"开始获取 URL: {url}, extract_mode={extract_mode}, "
         f"render_mode={render_mode}, wait_until={wait_until}, timeout_ms={timeout_ms}"
     )
+
+    # Apple Developer Documentation pages (including HIG) are JS shells whose
+    # authoritative article body is loaded from Apple-origin JSON. Prefer that
+    # source directly so HIG pages work even when Playwright is unavailable or
+    # networkidle never settles.
+    apple_payload = await _fetch_apple_doc_json(url, timeout_ms)
+    if apple_payload is not None:
+        data, json_url = apple_payload
+        apple_result = _render_apple_doc_markdown(data, json_url, extract_mode)
+        if apple_result:
+            return apple_result
 
     html = ""
     final_url = url
